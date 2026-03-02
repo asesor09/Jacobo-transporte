@@ -13,13 +13,13 @@ def conectar_db():
 
 def inicializar_tablas():
     conn = conectar_db(); cur = conn.cursor()
-    # Crear tablas si no existen
+    # 1. Crear tablas base si no existen
     cur.execute('CREATE TABLE IF NOT EXISTS vehiculos (id SERIAL PRIMARY KEY, placa TEXT UNIQUE NOT NULL, marca TEXT, modelo TEXT, conductor TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), tipo_gasto TEXT, monto NUMERIC, fecha DATE, detalle TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, descripcion TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS hoja_vida (id SERIAL PRIMARY KEY, vehiculo_id INTEGER UNIQUE REFERENCES vehiculos(id))')
     
-    # REPARACIÓN DE TABLAS (Agrega columnas faltantes sin borrar datos)
+    # 2. BLOQUE DE SEGURIDAD: Agregar columnas nuevas si la tabla ya existía
     columnas_hv = [
         ("soat_inicio", "DATE"), ("soat_vence", "DATE"),
         ("tecno_inicio", "DATE"), ("tecno_vence", "DATE"),
@@ -30,9 +30,8 @@ def inicializar_tablas():
         try:
             cur.execute(f"ALTER TABLE hoja_vida ADD COLUMN {col} {tipo}")
         except:
-            conn.rollback() # Si ya existe, pasa a la siguiente
-
-    # Verificar columna descripcion en ventas
+            conn.rollback() # Si la columna ya existe, ignora el error
+            
     try:
         cur.execute("ALTER TABLE ventas ADD COLUMN descripcion TEXT")
     except:
@@ -79,7 +78,7 @@ menu = st.sidebar.selectbox("📂 MÓDULOS", ["📊 Dashboard Mensual", "🚐 Fl
 
 # --- 📊 1. DASHBOARD ---
 if menu == "📊 Dashboard Mensual":
-    st.title("📊 Análisis Mensual")
+    st.title("📊 Análisis de Eficiencia")
     conn = conectar_db()
     df_g = pd.read_sql("SELECT monto, fecha FROM gastos", conn)
     df_s = pd.read_sql("SELECT valor_viaje, fecha FROM ventas", conn)
@@ -126,7 +125,7 @@ elif menu == "📑 Hoja de Vida":
             p_i = c3.date_input("Inicio Preventivo"); p_v = c3.date_input("Fin Preventivo")
             ck1, ck2 = st.columns(2)
             km_a = ck1.number_input("KM Actual", min_value=0); km_ll = ck2.number_input("KM Cambio Llantas", min_value=0)
-            if st.form_submit_button("Actualizar Hoja de Vida"):
+            if st.form_submit_button("Actualizar"):
                 cur = conn.cursor()
                 cur.execute('''INSERT INTO hoja_vida (vehiculo_id, soat_inicio, soat_vence, tecno_inicio, tecno_vence, prev_inicio, prev_vence, km_actual, km_llantas_cambio) 
                                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (vehiculo_id) 
@@ -138,6 +137,7 @@ elif menu == "📑 Hoja de Vida":
                 conn.commit(); st.success("Actualizado"); st.rerun()
 
     st.divider()
+    # QUERY BLINDADA (Solo lee si existen las columnas)
     df_h = pd.read_sql('''SELECT v.placa, h.soat_vence, h.tecno_vence, h.prev_vence, h.km_actual, h.km_llantas_cambio 
                           FROM hoja_vida h JOIN vehiculos v ON h.vehiculo_id = v.id''', conn)
     hoy = datetime.now().date()
@@ -145,21 +145,22 @@ elif menu == "📑 Hoja de Vida":
         st.subheader(f"🚗 Vehículo: {row['placa']}")
         col1, col2, col3, col4 = st.columns(4)
         for c, label, vence in zip([col1, col2, col3], ["SOAT", "TECNO", "PREV"], [row['soat_vence'], row['tecno_vence'], row['prev_vence']]):
-            d = (vence - hoy).days
-            if d < 0: c.error(f"❌ {label} VENCIDO\n({vence})")
-            elif d <= 15: c.warning(f"⚠️ {label} en {d} días")
-            else: c.success(f"✅ {label} OK\n({vence})")
-        km_r = row['km_llantas_cambio'] - row['km_actual']
-        if km_r <= 0: col4.error(f"❌ CAMBIO LLANTAS")
+            if vence:
+                d = (vence - hoy).days
+                if d < 0: c.error(f"❌ {label} VENCIDO\n({vence})")
+                elif d <= 15: c.warning(f"⚠️ {label} en {d} días")
+                else: c.success(f"✅ {label} OK\n({vence})")
+        km_r = (row['km_llantas_cambio'] or 0) - (row['km_actual'] or 0)
+        if km_r <= 0: col4.error(f"❌ LLANTAS VENCIDAS")
         elif km_r <= 1000: col4.warning(f"⚠️ Llantas en {km_r} KM")
         else: col4.success(f"✅ Llantas OK\n({km_r} KM)")
     conn.close()
 
-# --- 💸 4. GASTOS (CON DETALLE Y EDICIÓN COMPLETA) ---
+# --- 💸 4. GASTOS (CON DETALLE Y EDICIÓN TOTAL) ---
 elif menu == "💸 Gastos":
     st.title("💸 Registro de Gastos")
     conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    t1, t2 = st.tabs(["📝 Registro y Vista", "✏️ Editar Gasto"])
+    t1, t2 = st.tabs(["📝 Registro y Vista", "✏️ Editar Todo"])
     with t1:
         with st.form("g"):
             c1, c2 = st.columns(2)
@@ -176,12 +177,12 @@ elif menu == "💸 Gastos":
     with t2:
         df_e = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.id DESC LIMIT 15", conn)
         if not df_e.empty:
-            sel = st.selectbox("Gasto a editar", df_e.apply(lambda r: f"ID:{r['id']} | {r['placa']} | {r['fecha']} | $ {r['monto']}", axis=1))
+            sel = st.selectbox("Registro a editar", df_e.apply(lambda r: f"ID:{r['id']} | {r['placa']} | {r['fecha']} | $ {r['monto']}", axis=1))
             id_ed = int(sel.split("|")[0].split(":")[1].strip())
             with st.form("ed_g"):
                 c1, c2 = st.columns(2)
                 n_m = c1.number_input("Nuevo Monto", min_value=0); n_f = c1.date_input("Nueva Fecha")
-                n_t = c2.selectbox("Nuevo Tipo", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Otros"]); n_d = c2.text_input("Nuevo Detalle")
+                n_t = c2.selectbox("Nuevo Tipo", ["Combustible", "Peaje", "Mantenimiento", "Otros"]); n_d = c2.text_input("Nuevo Detalle")
                 if st.form_submit_button("Actualizar Todo"):
                     cur = conn.cursor(); cur.execute("UPDATE gastos SET monto=%s, fecha=%s, tipo_gasto=%s, detalle=%s WHERE id=%s", (n_m, n_f, n_t, n_d, id_ed))
                     conn.commit(); st.warning(f"Gasto {id_ed} actualizado"); st.rerun()
@@ -191,7 +192,7 @@ elif menu == "💸 Gastos":
 elif menu == "💰 Ventas":
     st.title("💰 Registro de Ventas")
     conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    t1, t2 = st.tabs(["📝 Registro y Vista", "✏️ Editar Venta"])
+    t1, t2 = st.tabs(["📝 Registro y Vista", "✏️ Editar Todo"])
     with t1:
         with st.form("s"):
             c1, c2 = st.columns(2)
@@ -207,7 +208,7 @@ elif menu == "💰 Ventas":
     with t2:
         df_e = pd.read_sql("SELECT s.id, s.fecha, v.placa, s.valor_viaje, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.id DESC LIMIT 15", conn)
         if not df_e.empty:
-            sel = st.selectbox("Venta a editar", df_e.apply(lambda r: f"ID:{r['id']} | {r['placa']} | {r['fecha']} | $ {r['valor_viaje']}", axis=1))
+            sel = st.selectbox("Registro a editar", df_e.apply(lambda r: f"ID:{r['id']} | {r['placa']} | {r['fecha']} | $ {r['valor_viaje']}", axis=1))
             id_ed = int(sel.split("|")[0].split(":")[1].strip())
             with st.form("ed_s"):
                 c1, c2 = st.columns(2)
