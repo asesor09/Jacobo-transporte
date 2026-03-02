@@ -42,8 +42,6 @@ def inicializar_tablas():
             id SERIAL PRIMARY KEY,
             vehiculo_id INTEGER REFERENCES vehiculos(id),
             cliente TEXT,
-            origen TEXT,
-            destino TEXT,
             valor_viaje NUMERIC,
             fecha DATE
         )
@@ -51,15 +49,15 @@ def inicializar_tablas():
     conn.commit()
     conn.close()
 
-# --- INTERFAZ ---
-st.set_page_config(page_title="Transporte Jacobo Pro", layout="wide", page_icon="🚐")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="C&E Eficiencias", layout="wide", page_icon="🚐")
 
 # Seguridad
 st.sidebar.title("🔐 Acceso")
 password = st.sidebar.text_input("Contraseña", type="password")
 if password != "Jacobo2026":
     st.title("🚐 Sistema de Gestión de Transporte")
-    st.warning("Por favor, ingrese la contraseña.")
+    st.warning("Por favor, ingrese la contraseña en la barra lateral.")
     st.stop()
 
 try:
@@ -67,80 +65,109 @@ try:
 except:
     pass
 
-st.title("🚐 Panel de Control - Gestión Global")
-menu = st.sidebar.radio("Navegación", ["🏠 Inicio", "🚚 Gestión de Vehículos", "💸 Registro de Gastos", "💰 Ventas / Viajes"])
+st.sidebar.title("Navegación")
+menu = st.sidebar.radio("Ir a:", ["🏠 Inicio", "🚚 Vehículos", "💸 Gastos", "💰 Ventas"])
 
-# --- 🏠 1. SECCIÓN INICIO ---
+# --- 🏠 INICIO ---
 if menu == "🏠 Inicio":
+    st.title("📊 Resumen General")
     conn = conectar_db()
     v = pd.read_sql("SELECT COUNT(*) FROM vehiculos", conn).iloc[0,0]
     g = pd.read_sql("SELECT SUM(monto) FROM gastos", conn).iloc[0,0] or 0
     s = pd.read_sql("SELECT SUM(valor_viaje) FROM ventas", conn).iloc[0,0] or 0
     conn.close()
     
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Unidades en Flota", v)
-    c2.metric("Total Gastos", f"${g:,.2f}")
-    c3.metric("Total Ventas", f"${s:,.2f}")
-    st.info(f"💡 Utilidad Actual: ${s-g:,.2f}")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Vehículos", v)
+    col2.metric("Total Gastos", f"${g:,.0f}")
+    col3.metric("Total Ventas", f"${s:,.0f}")
+    
+    utilidad = s - g
+    if utilidad >= 0:
+        st.success(f"📈 Utilidad Neta: ${utilidad:,.0f}")
+    else:
+        st.error(f"📉 Déficit Actual: ${utilidad:,.0f}")
 
-# --- 🚚 2. SECCIÓN VEHÍCULOS ---
-elif menu == "🚚 Gestión de Vehículos":
-    t_reg, t_edit, t_ver = st.tabs(["➕ Registrar", "✏️ Editar", "🔍 Ver Flota"])
-    with t_reg:
-        with st.form("reg_v"):
-            c1, c2 = st.columns(2)
-            placa = c1.text_input("Placa").upper()
-            marca = c1.text_input("Marca")
-            modelo = c1.text_input("Modelo")
-            cond = c2.text_input("Conductor")
-            tipo = c2.selectbox("Tipo", ["Ambulancia", "Van", "Particular"])
-            km = c2.number_input("KM Inicial", min_value=0)
-            if st.form_submit_button("Guardar Vehículo"):
+# --- 🚚 VEHÍCULOS ---
+elif menu == "🚚 Vehículos":
+    st.title("🚚 Gestión de Unidades")
+    with st.form("nuevo_v"):
+        st.subheader("Registrar Nuevo Vehículo")
+        c1, c2 = st.columns(2)
+        placa = c1.text_input("Placa (Ej: XYZ123)").upper()
+        marca = c1.text_input("Marca")
+        modelo = c2.text_input("Modelo (Año)")
+        cond = c2.text_input("Conductor Asignado")
+        if st.form_submit_button("Guardar Vehículo"):
+            if placa:
                 conn = conectar_db(); cur = conn.cursor()
-                cur.execute("INSERT INTO vehiculos (placa, marca, modelo, tipo, conductor, km_actual) VALUES (%s,%s,%s,%s,%s,%s)", (placa, marca, modelo, tipo, cond, km))
-                conn.commit(); conn.close(); st.success("Registrado"); st.rerun()
-    with t_ver:
-        conn = conectar_db()
-        st.dataframe(pd.read_sql("SELECT * FROM vehiculos", conn), use_container_width=True)
-        conn.close()
+                try:
+                    cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (placa, marca, modelo, cond))
+                    conn.commit(); st.success("Vehículo guardado en la nube")
+                except: st.error("Esa placa ya existe")
+                finally: conn.close(); st.rerun()
 
-# --- 💸 3. SECCIÓN GASTOS ---
-elif menu == "💸 Registro de Gastos":
-    st.header("Control de Gastos")
+# --- 💸 VENTANA DE GASTOS (LO QUE PEDISTE) ---
+elif menu == "💸 Gastos":
+    st.title("💸 Registro de Gastos")
     conn = conectar_db()
-    v_list = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    if not v_list.empty:
-        with st.form("reg_g"):
-            v_sel = st.selectbox("Vehículo", v_list['placa'])
-            v_id = int(v_list[v_list['placa'] == v_sel]['id'].values[0])
-            monto = st.number_input("Monto", min_value=0.0)
-            inst = st.text_input("Institución/Detalle")
-            fecha = st.date_input("Fecha Gasto")
-            if st.form_submit_button("Guardar Gasto"):
-                cur = conn.cursor()
-                cur.execute("INSERT INTO gastos (vehiculo_id, monto, institucion_destino, fecha) VALUES (%s,%s,%s,%s)", (v_id, monto, inst, fecha))
-                conn.commit(); st.success("Gasto guardado"); st.rerun()
-        df_g = pd.read_sql("SELECT g.*, v.placa FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id", conn)
-        st.dataframe(df_g, use_container_width=True)
+    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+    
+    if v_data.empty:
+        st.warning("⚠️ Primero debe registrar un vehículo en la pestaña 'Vehículos'.")
+    else:
+        with st.container():
+            st.subheader("📝 Ingresar nuevo gasto")
+            with st.form("form_gastos", clear_on_submit=True):
+                col1, col2 = st.columns(2)
+                veh_sel = col1.selectbox("Seleccione el Vehículo", v_data['placa'])
+                v_id = int(v_data[v_data['placa'] == veh_sel]['id'].values[0])
+                tipo = col1.selectbox("Tipo de Gasto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Parqueadero", "Otros"])
+                
+                monto = col2.number_input("Monto ($)", min_value=0)
+                fecha = col2.date_input("Fecha", value=datetime.now())
+                detalle = st.text_input("Detalle (Ej: Gasolinería Texaco)")
+                
+                if st.form_submit_button("Registrar Gasto"):
+                    cur = conn.cursor()
+                    cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", 
+                                (v_id, tipo, monto, fecha, detalle))
+                    conn.commit()
+                    st.success(f"Gasto de {tipo} por ${monto} registrado con éxito.")
+                    st.rerun()
+
+        st.divider()
+        st.subheader("🔍 Historial de Gastos Recientes")
+        df_gastos = pd.read_sql('''
+            SELECT g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle 
+            FROM gastos g 
+            JOIN vehiculos v ON g.vehiculo_id = v.id 
+            ORDER BY g.fecha DESC
+        ''', conn)
+        st.dataframe(df_gastos, use_container_width=True)
     conn.close()
 
-# --- 💰 4. SECCIÓN VENTAS ---
-elif menu == "💰 Ventas / Viajes":
-    st.header("Registro de Ventas")
+# --- 💰 VENTANA DE VENTAS ---
+elif menu == "💰 Ventas":
+    st.title("💰 Registro de Viajes / Ventas")
     conn = conectar_db()
-    v_list = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    if not v_list.empty:
-        with st.form("reg_s"):
-            v_sel = st.selectbox("Vehículo", v_list['placa'])
-            v_id = int(v_list[v_list['placa'] == v_sel]['id'].values[0])
-            cliente = st.text_input("Cliente")
-            valor = st.number_input("Valor Viaje", min_value=0.0)
-            fecha = st.date_input("Fecha Viaje")
+    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+    
+    if v_data.empty:
+        st.warning("⚠️ Primero debe registrar un vehículo.")
+    else:
+        with st.form("form_ventas"):
+            c1, c2 = st.columns(2)
+            veh_sel = c1.selectbox("Vehículo", v_data['placa'])
+            v_id = int(v_data[v_data['placa'] == veh_sel]['id'].values[0])
+            cliente = c1.text_input("Cliente / Empresa")
+            valor = c2.number_input("Valor del Viaje", min_value=0)
+            fecha = c2.date_input("Fecha")
             if st.form_submit_button("Guardar Venta"):
                 cur = conn.cursor()
                 cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha) VALUES (%s,%s,%s,%s)", (v_id, cliente, valor, fecha))
-                conn.commit(); st.success("Venta guardada"); st.rerun()
-        df_v = pd.read_sql("SELECT s.*, v.placa FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id", conn)
+                conn.commit(); st.success("Venta registrada"); st.rerun()
+        
+        df_v = pd.read_sql("SELECT s.fecha, v.placa, s.cliente, s.valor_viaje FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id", conn)
         st.dataframe(df_v, use_container_width=True)
     conn.close()
