@@ -3,6 +3,7 @@ import psycopg2
 import pandas as pd
 from datetime import datetime
 
+
 # --- CONFIGURACIÓN DE CONEXIÓN GLOBAL (NEON) ---
 DB_URL = "postgresql://neondb_owner:npg_c7Dkwlh1jzGQ@ep-lucky-shadow-ac1thtiq-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require"
 
@@ -129,4 +130,5 @@ elif menu == "💸 Registro de Gastos":
         if not df_g.empty:
             df_g['mes'] = pd.to_datetime(df_g['fecha']).dt.strftime('%Y-%m')
             mes_sel = st.selectbox("Ver Mes", sorted(df_g['mes'].unique(), reverse=True))
+
             st.dataframe(df_g[df_g['mes'] == mes_sel][['fecha', 'placa', 'monto', 'institucion_destino']], use_container_width=True)
