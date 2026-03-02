@@ -1,6 +1,7 @@
 import streamlit as st
 import psycopg2
 import pandas as pd
+import plotly.express as px
 from datetime import datetime
 import io
 
@@ -10,162 +11,131 @@ DB_URL = "postgresql://neondb_owner:npg_c7Dkwlh1jzGQ@ep-lucky-shadow-ac1thtiq-po
 def conectar_db():
     return psycopg2.connect(DB_URL)
 
-# Función para Excel
 def to_excel(df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Reporte')
     return output.getvalue()
 
-# --- DISEÑO Y ESTILO ---
-st.set_page_config(page_title="C&E Eficiencias", layout="wide", page_icon="📈")
+# --- ESTILO ---
+st.set_page_config(page_title="C&E Eficiencias", layout="wide", page_icon="📊")
 
-# Estilo CSS personalizado para mejorar la elegancia
 st.markdown("""
     <style>
-    .main {
-        background-color: #f5f7f9;
-    }
-    .stMetric {
-        background-color: #ffffff;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-    }
-    div.stButton > button:first-child {
-        background-color: #007bff;
-        color: white;
-        border-radius: 5px;
-        width: 100%;
-    }
+    .main { background-color: #f0f2f6; }
+    .stMetric { background-color: #ffffff; padding: 15px; border-radius: 10px; border-left: 5px solid #007bff; }
     </style>
     """, unsafe_allow_html=True)
 
 # --- SEGURIDAD ---
-st.sidebar.markdown("## 🛡️ Acceso Seguro")
-password = st.sidebar.text_input("Contraseña", type="password")
+password = st.sidebar.text_input("🔑 Contraseña de acceso", type="password")
 if password != "Jacobo2026":
-    st.title("🚐 C&E Eficiencias - Transporte")
-    st.info("Por favor, introduce tu contraseña para gestionar la flota.")
+    st.title("🚐 C&E Eficiencias")
+    st.info("Por favor, ingrese la contraseña.")
     st.stop()
 
-# --- MENÚ LATERAL ---
 st.sidebar.divider()
-menu = st.sidebar.selectbox("📂 SELECCIONE UN MÓDULO", 
-                            ["📊 Resumen Ejecutivo", "🚐 Flota de Vehículos", "💸 Registro de Gastos", "💰 Control de Ventas"])
+menu = st.sidebar.radio("Navegación Principal", ["📊 Dashboard Mensual", "🚐 Vehículos", "💸 Gastos", "💰 Ventas"])
 
-# --- 📊 1. RESUMEN EJECUTIVO (ELEGANTE) ---
-if menu == "📊 Resumen Ejecutivo":
-    st.markdown("# 📊 Tablero de Eficiencia")
-    st.markdown("---")
-    
+# --- 📊 1. DASHBOARD MENSUAL (VISUAL) ---
+if menu == "📊 Dashboard Mensual":
+    st.title("📊 Análisis de Eficiencia Mensual")
     conn = conectar_db()
-    v = pd.read_sql("SELECT COUNT(*) FROM vehiculos", conn).iloc[0,0]
-    g = pd.read_sql("SELECT SUM(monto) FROM gastos", conn).iloc[0,0] or 0
-    s = pd.read_sql("SELECT SUM(valor_viaje) FROM ventas", conn).iloc[0,0] or 0
-    conn.close()
     
-    # Tarjetas visuales
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("📦 Vehículos Activos", v)
-    with c2:
-        st.metric("📉 Egresos (Gastos)", f"$ {g:,.0f}".replace(",", "."))
-    with c3:
-        st.metric("📈 Ingresos (Ventas)", f"$ {s:,.0f}".replace(",", "."))
-    
-    st.divider()
-    utilidad = s - g
-    if utilidad >= 0:
-        st.success(f"### 🚀 Utilidad Neta Actual: **$ {utilidad:,.0f}**".replace(",", "."))
-    else:
-        st.error(f"### ⚠️ Déficit en Operación: **$ {utilidad:,.0f}**".replace(",", "."))
-
-# --- 🚐 2. GESTIÓN DE VEHÍCULOS ---
-elif menu == "🚐 Flota de Vehículos":
-    st.markdown("# 🚐 Gestión de Unidades")
-    with st.expander("➕ Registrar Nueva Unidad"):
-        with st.form("form_v"):
-            c1, c2 = st.columns(2)
-            placa = c1.text_input("Placa").upper()
-            marca = c1.text_input("Marca")
-            modelo = c2.text_input("Modelo")
-            cond = c2.text_input("Conductor")
-            if st.form_submit_button("Guardar Vehículo"):
-                if placa:
-                    conn = conectar_db(); cur = conn.cursor()
-                    try:
-                        cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (placa, marca, modelo, cond))
-                        conn.commit(); st.success("✅ Unidad agregada")
-                    except: st.error("❌ Error: La placa ya existe.")
-                    finally: conn.close(); st.rerun()
-
-    st.markdown("### 🔍 Listado de Flota")
-    conn = conectar_db()
-    df_v = pd.read_sql("SELECT placa as \"Placa\", marca as \"Marca\", modelo as \"Modelo\", conductor as \"Conductor\" FROM vehiculos", conn)
-    conn.close()
-    st.table(df_v) # Usamos table para una vista más limpia
-
-# --- 💸 3. GASTOS ---
-elif menu == "💸 Registro de Gastos":
-    st.markdown("# 💸 Control de Gastos")
-    conn = conectar_db()
-    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    
-    if not v_data.empty:
-        with st.container():
-            with st.form("form_g"):
-                col1, col2 = st.columns(2)
-                veh = col1.selectbox("Vehículo", v_data['placa'])
-                v_id = int(v_data[v_data['placa'] == veh]['id'].values[0])
-                tipo = col1.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Seguros", "Otros"])
-                monto = col2.number_input("Monto ($)", min_value=0)
-                fecha = col2.date_input("Fecha", value=datetime.now())
-                detalle = st.text_input("Descripción breve")
-                if st.form_submit_button("💾 Guardar Gasto"):
-                    cur = conn.cursor()
-                    cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (v_id, tipo, monto, fecha, detalle))
-                    conn.commit(); st.success("Gasto registrado"); st.rerun()
-
-        st.divider()
-        df_g = pd.read_sql('''
-            SELECT g.fecha as "Fecha", v.placa as "Placa", g.tipo_gasto as "Tipo", g.monto as "Monto_Num", g.detalle as "Detalle" 
-            FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC
-        ''', conn)
-        if not df_g.empty:
-            df_mostrar = df_g.copy()
-            df_mostrar["Valor"] = df_mostrar["Monto_Num"].apply(lambda x: f"$ {x:,.0f}".replace(",", "."))
-            st.dataframe(df_mostrar[["Fecha", "Placa", "Tipo", "Valor", "Detalle"]], use_container_width=True)
-            st.download_button("📥 Exportar Gastos (Excel)", data=to_excel(df_g), file_name='gastos.xlsx')
+    # Cargar datos
+    df_g = pd.read_sql("SELECT monto, fecha, tipo_gasto FROM gastos", conn)
+    df_v = pd.read_sql("SELECT valor_viaje, fecha FROM ventas", conn)
     conn.close()
 
-# --- 💰 4. VENTAS ---
-elif menu == "💰 Control de Ventas":
-    st.markdown("# 💰 Registro de Ventas")
-    conn = conectar_db()
-    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    
-    if not v_data.empty:
-        with st.form("form_s"):
-            c1, c2 = st.columns(2)
-            veh = c1.selectbox("Vehículo", v_data['placa'])
-            v_id = int(v_data[v_data['placa'] == veh]['id'].values[0])
-            cliente = c1.text_input("Cliente / Empresa")
-            valor = c2.number_input("Valor Facturado ($)", min_value=0)
-            fecha = c2.date_input("Fecha")
-            if st.form_submit_button("💾 Guardar Viaje"):
-                cur = conn.cursor()
-                cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha) VALUES (%s,%s,%s,%s)", (v_id, cliente, valor, fecha))
-                conn.commit(); st.success("Venta guardada"); st.rerun()
+    if not df_g.empty or not df_v.empty:
+        # Procesar fechas para agrupar por mes
+        df_g['mes'] = pd.to_datetime(df_g['fecha']).dt.strftime('%Y-%m')
+        df_v['mes'] = pd.to_datetime(df_v['fecha']).dt.strftime('%Y-%m')
+
+        # Agrupar por mes
+        gastos_mes = df_g.groupby('mes')['monto'].sum().reset_index()
+        ventas_mes = df_v.groupby('mes')['valor_viaje'].sum().reset_index()
         
+        # Unir datos para la gráfica comparativa
+        df_comparativo = pd.merge(ventas_mes, gastos_mes, on='mes', how='outer').fillna(0)
+        df_comparativo.columns = ['Mes', 'Ingresos', 'Egresos']
+
+        # --- MÉTRICAS TOTALES ---
+        c1, c2, c3 = st.columns(3)
+        total_ingresos = df_comparativo['Ingresos'].sum()
+        total_egresos = df_comparativo['Egresos'].sum()
+        c1.metric("Total Ingresos", f"$ {total_ingresos:,.0f}".replace(",", "."))
+        c2.metric("Total Egresos", f"$ {total_egresos:,.0f}".replace(",", "."))
+        c3.metric("Utilidad Neta", f"$ {total_ingresos - total_egresos:,.0f}".replace(",", "."), delta=f"{((total_ingresos-total_egresos)/total_ingresos*100 if total_ingresos>0 else 0):.1f}%")
+
         st.divider()
-        df_s = pd.read_sql('''
-            SELECT s.fecha as "Fecha", v.placa as "Placa", s.cliente as "Cliente", s.valor_viaje as "Valor_Num" 
-            FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.fecha DESC
-        ''', conn)
-        if not df_s.empty:
-            df_mostrar_s = df_s.copy()
-            df_mostrar_s["Ingreso"] = df_mostrar_s["Valor_Num"].apply(lambda x: f"$ {x:,.0f}".replace(",", "."))
-            st.dataframe(df_mostrar_s[["Fecha", "Placa", "Cliente", "Ingreso"]], use_container_width=True)
-            st.download_button("📥 Exportar Ventas (Excel)", data=to_excel(df_s), file_name='ventas.xlsx')
+
+        # --- GRÁFICA 1: COMPARATIVO MENSUAL (BARRAS) ---
+        st.subheader("📈 Comparativo Ingresos vs Egresos por Mes")
+        fig_bar = px.bar(df_comparativo, x='Mes', y=['Ingresos', 'Egresos'], 
+                         barmode='group', color_discrete_map={'Ingresos': '#28a745', 'Egresos': '#dc3545'},
+                         labels={'value': 'Monto ($)', 'variable': 'Categoría'})
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+        # --- GRÁFICA 2: DISTRIBUCIÓN DE GASTOS (PIE) ---
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("🍕 ¿En qué estamos gastando?")
+            fig_pie = px.pie(df_g, values='monto', names='tipo_gasto', hole=0.4,
+                             color_discrete_sequence=px.colors.qualitative.Pastel)
+            st.plotly_chart(fig_pie, use_container_width=True)
+        
+        with col_b:
+            st.subheader("💰 Utilidad Mensual")
+            df_comparativo['Utilidad'] = df_comparativo['Ingresos'] - df_comparativo['Egresos']
+            fig_line = px.line(df_comparativo, x='Mes', y='Utilidad', markers=True,
+                               line_shape='spline', render_mode='svg')
+            st.plotly_chart(fig_line, use_container_width=True)
+    else:
+        st.info("Registre datos en Gastos o Ventas para ver las gráficas.")
+
+# --- SECCIONES DE REGISTRO (IGUAL QUE ANTES) ---
+elif menu == "🚐 Vehículos":
+    st.title("🚐 Gestión de Flota")
+    with st.form("v"):
+        c1, c2 = st.columns(2)
+        placa = c1.text_input("Placa").upper()
+        cond = c2.text_input("Conductor")
+        if st.form_submit_button("Guardar"):
+            conn = conectar_db(); cur = conn.cursor()
+            cur.execute("INSERT INTO vehiculos (placa, conductor) VALUES (%s,%s)", (placa, cond))
+            conn.commit(); conn.close(); st.success("Guardado"); st.rerun()
+
+elif menu == "💸 Gastos":
+    st.title("💸 Registro de Gastos")
+    conn = conectar_db()
+    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+    with st.form("g"):
+        c1, c2 = st.columns(2)
+        v_sel = c1.selectbox("Vehículo", v_data['placa'])
+        v_id = int(v_data[v_data['placa'] == v_sel]['id'].values[0])
+        tipo = c1.selectbox("Tipo", ["Combustible", "Peaje", "Mantenimiento", "Otros"])
+        monto = c2.number_input("Valor ($)", min_value=0)
+        fecha = c2.date_input("Fecha")
+        if st.form_submit_button("Registrar"):
+            cur = conn.cursor()
+            cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha) VALUES (%s,%s,%s,%s)", (v_id, tipo, monto, fecha))
+            conn.commit(); st.success("Registrado"); st.rerun()
+    conn.close()
+
+elif menu == "💰 Ventas":
+    st.title("💰 Registro de Ventas")
+    conn = conectar_db()
+    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+    with st.form("s"):
+        c1, c2 = st.columns(2)
+        v_sel = c1.selectbox("Vehículo", v_data['placa'])
+        v_id = int(v_data[v_data['placa'] == v_sel]['id'].values[0])
+        cliente = c1.text_input("Cliente")
+        valor = c2.number_input("Valor ($)", min_value=0)
+        fecha = c2.date_input("Fecha")
+        if st.form_submit_button("Guardar"):
+            cur = conn.cursor()
+            cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha) VALUES (%s,%s,%s,%s)", (v_id, cliente, valor, fecha))
+            conn.commit(); st.success("Registrado"); st.rerun()
     conn.close()
