@@ -17,8 +17,13 @@ def inicializar_db():
     cur.execute('CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), tipo_gasto TEXT, monto NUMERIC, fecha DATE, detalle TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, descripcion TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS hoja_vida (id SERIAL PRIMARY KEY, vehiculo_id INTEGER UNIQUE REFERENCES vehiculos(id), soat_inicio DATE, soat_vence DATE, tecno_inicio DATE, tecno_vence DATE, prev_inicio DATE, prev_vence DATE, km_actual INTEGER, km_llantas_cambio INTEGER)')
+    
+    # Reparación de seguridad por si faltan columnas
     try: cur.execute("ALTER TABLE ventas ADD COLUMN descripcion TEXT")
     except: conn.rollback()
+    try: cur.execute("ALTER TABLE gastos ADD COLUMN tipo_gasto TEXT")
+    except: conn.rollback()
+    
     conn.commit(); conn.close()
 
 def to_excel(df):
@@ -54,7 +59,7 @@ if st.sidebar.button("🚪 CERRAR SESIÓN"):
 
 menu = st.sidebar.selectbox("📂 MÓDULOS", ["📊 Dashboard Mensual", "🚐 Flota", "📑 Hoja de Vida", "💸 Gastos", "💰 Ventas"])
 
-# --- 📊 1. DASHBOARD (SUMATORIA AUTOMÁTICA) ---
+# --- 📊 1. DASHBOARD MENTAL ---
 if menu == "📊 Dashboard Mensual":
     st.title("📊 Resumen Consolidado Mensual")
     conn = conectar_db()
@@ -63,19 +68,14 @@ if menu == "📊 Dashboard Mensual":
     conn.close()
 
     if not df_g.empty or not df_s.empty:
-        # Procesar meses
         df_g['Mes'] = pd.to_datetime(df_g['fecha']).dt.strftime('%Y-%m')
         df_s['Mes'] = pd.to_datetime(df_s['fecha']).dt.strftime('%Y-%m')
-        
         g_m = df_g.groupby('Mes')['monto'].sum().reset_index()
         s_m = df_s.groupby('Mes')['valor_viaje'].sum().reset_index()
-        
-        # Unir Ventas y Gastos por Mes
         resumen = pd.merge(s_m, g_m, on='Mes', how='outer').fillna(0)
         resumen.columns = ['Mes', 'Ventas', 'Gastos']
         resumen['Utilidad'] = resumen['Ventas'] - resumen['Gastos']
         
-        # Métricas Globales
         c1, c2, c3 = st.columns(3)
         c1.metric("Ingresos Totales", f"$ {resumen['Ventas'].sum():,.0f}".replace(",", "."))
         c2.metric("Gastos Totales", f"$ {resumen['Gastos'].sum():,.0f}".replace(",", "."))
@@ -83,17 +83,13 @@ if menu == "📊 Dashboard Mensual":
 
         st.divider()
         st.subheader("🗓️ Detalle de Sumas por Mes")
-        
-        # Formatear tabla para visualización
         res_v = resumen.copy().sort_values(by='Mes', ascending=False)
         for c in ['Ventas', 'Gastos', 'Utilidad']:
             res_v[c] = res_v[c].apply(lambda x: f"$ {x:,.0f}".replace(",", "."))
         st.table(res_v)
-        
-        st.plotly_chart(px.bar(resumen, x='Mes', y=['Ventas', 'Gastos'], barmode='group', 
-                              color_discrete_map={'Ventas':'#28a745','Gastos':'#dc3545'}), use_container_width=True)
+        st.plotly_chart(px.bar(resumen, x='Mes', y=['Ventas', 'Gastos'], barmode='group', color_discrete_map={'Ventas':'#28a745','Gastos':'#dc3545'}), use_container_width=True)
     else:
-        st.info("No hay datos para sumar. Empieza a registrar en Gastos o Ventas.")
+        st.info("Registre datos para ver el balance mensual.")
 
 # --- 🚐 2. FLOTA ---
 elif menu == "🚐 Flota":
@@ -123,7 +119,6 @@ elif menu == "📑 Hoja de Vida":
                 cur = conn.cursor(); cur.execute('''INSERT INTO hoja_vida (vehiculo_id, soat_inicio, soat_vence, tecno_inicio, tecno_vence, prev_inicio, prev_vence) 
                 VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (vehiculo_id) DO UPDATE SET soat_vence=EXCLUDED.soat_vence, tecno_vence=EXCLUDED.tecno_vence, prev_vence=EXCLUDED.prev_vence''', (v_id, s_i, s_v, t_i, t_v, p_i, p_v))
                 conn.commit(); st.success("Actualizado"); st.rerun()
-    
     df_h = pd.read_sql('''SELECT v.placa, h.soat_vence, h.tecno_vence, h.prev_vence FROM hoja_vida h JOIN vehiculos v ON h.vehiculo_id = v.id''', conn)
     hoy = datetime.now().date()
     for _, row in df_h.iterrows():
@@ -137,33 +132,40 @@ elif menu == "📑 Hoja de Vida":
                 else: c.success(f"✅ {lbl} OK")
     conn.close()
 
-# --- 💸 4. GASTOS ---
+# --- 💸 4. GASTOS (CORREGIDO) ---
 elif menu == "💸 Gastos":
     st.title("💸 Registro de Gastos")
     conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     
-    # Resumen rápido de sumas mensuales
+    # Sumas mensuales visibles arriba
     df_sum_g = pd.read_sql("SELECT monto, fecha FROM gastos", conn)
     if not df_sum_g.empty:
         df_sum_g['Mes'] = pd.to_datetime(df_sum_g['fecha']).dt.strftime('%Y-%m')
         res_g = df_sum_g.groupby('Mes')['monto'].sum().reset_index()
         res_g['monto'] = res_g['monto'].apply(lambda x: f"$ {x:,.0f}".replace(",", "."))
-        st.write("**Sumatoria de Gastos por Mes:**", res_g)
+        st.write("**Sumatoria Mensual:**", res_g)
 
     t1, t2 = st.tabs(["Registro", "Editar"])
     with t1:
         with st.form("g"):
             v_id = int(v_data[v_data['placa'] == st.selectbox("Vehículo", v_data['placa'])]['id'].values[0])
-            mon = st.number_input("Monto", min_value=0); fec = st.date_input("Fecha"); det = st.text_input("Detalle")
+            tipo = st.selectbox("Concepto (Tipo)", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Repuestos", "Otros"])
+            mon = st.number_input("Monto", min_value=0); fec = st.date_input("Fecha"); det = st.text_input("Detalle Extra")
             if st.form_submit_button("Guardar Gasto"):
-                cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, monto, fecha, detalle) VALUES (%s,%s,%s,%s)", (v_id, mon, fec, det))
-                conn.commit(); st.success("Gasto Guardado y Sumado"); st.rerun()
-        df = pd.read_sql('SELECT g.fecha, v.placa, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC', conn)
-        st.dataframe(df, use_container_width=True)
+                cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (v_id, tipo, mon, fec, det))
+                conn.commit(); st.success("Gasto Guardado"); st.rerun()
+        
+        # TABLA HISTORIAL (CON CONCEPTO)
+        df = pd.read_sql('SELECT g.fecha, v.placa, g.tipo_gasto as "Concepto", g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC', conn)
+        df_v = df.copy()
+        df_v["monto"] = df_v["monto"].apply(lambda x: f"$ {x:,.0f}".replace(",", "."))
+        st.dataframe(df_v, use_container_width=True)
+        st.download_button("📥 Excel Gastos", data=to_excel(df), file_name='gastos.xlsx')
+    
     with t2:
-        df_e = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.monto FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.id DESC LIMIT 10", conn)
+        df_e = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.id DESC LIMIT 10", conn)
         if not df_e.empty:
-            sel = st.selectbox("Editar Gasto", df_e.apply(lambda r: f"ID:{r['id']} | {r['placa']}", axis=1))
+            sel = st.selectbox("Gasto a editar", df_e.apply(lambda r: f"ID:{r['id']} | {r['placa']} | {r['tipo_gasto']}", axis=1))
             id_ed = int(sel.split("|")[0].split(":")[1].strip())
             with st.form("ed_g"):
                 n_m = st.number_input("Nuevo Monto"); n_f = st.date_input("Nueva Fecha"); n_d = st.text_input("Nuevo Detalle")
@@ -177,32 +179,24 @@ elif menu == "💰 Ventas":
     st.title("💰 Registro de Ventas")
     conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
 
-    # Resumen rápido de sumas mensuales
     df_sum_v = pd.read_sql("SELECT valor_viaje, fecha FROM ventas", conn)
     if not df_sum_v.empty:
         df_sum_v['Mes'] = pd.to_datetime(df_sum_v['fecha']).dt.strftime('%Y-%m')
         res_v = df_sum_v.groupby('Mes')['valor_viaje'].sum().reset_index()
         res_v['valor_viaje'] = res_v['valor_viaje'].apply(lambda x: f"$ {x:,.0f}".replace(",", "."))
-        st.write("**Sumatoria de Ventas por Mes:**", res_v)
+        st.write("**Sumatoria Mensual:**", res_v)
 
     t1, t2 = st.tabs(["Registro", "Editar"])
     with t1:
         with st.form("s"):
             v_id = int(v_data[v_data['placa'] == st.selectbox("Vehículo", v_data['placa'])]['id'].values[0])
-            cli = st.text_input("Cliente"); val = st.number_input("Valor", min_value=0); fec = st.date_input("Fecha"); dsc = st.text_input("Descripción")
+            cli = st.text_input("Cliente/Empresa"); val = st.number_input("Valor", min_value=0); fec = st.date_input("Fecha"); dsc = st.text_input("Descripción")
             if st.form_submit_button("Guardar Venta"):
                 cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion) VALUES (%s,%s,%s,%s,%s)", (v_id, cli, val, fec, dsc))
-                conn.commit(); st.success("Venta Guardada y Sumada"); st.rerun()
+                conn.commit(); st.success("Venta Guardada"); st.rerun()
+        
         df = pd.read_sql('SELECT s.fecha, v.placa, s.cliente, s.valor_viaje, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.fecha DESC', conn)
-        st.dataframe(df, use_container_width=True)
-    with t2:
-        df_e = pd.read_sql("SELECT s.id, s.fecha, v.placa, s.valor_viaje FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.id DESC LIMIT 10", conn)
-        if not df_e.empty:
-            sel = st.selectbox("Editar Venta", df_e.apply(lambda r: f"ID:{r['id']} | {r['placa']}", axis=1))
-            id_ed = int(sel.split("|")[0].split(":")[1].strip())
-            with st.form("ed_s"):
-                n_v = st.number_input("Nuevo Valor"); n_f = st.date_input("Nueva Fecha"); n_d = st.text_input("Nueva Desc.")
-                if st.form_submit_button("Actualizar"):
-                    cur = conn.cursor(); cur.execute("UPDATE ventas SET valor_viaje=%s, fecha=%s, descripcion=%s WHERE id=%s", (n_v, n_f, n_d, id_ed))
-                    conn.commit(); st.warning("Registro Actualizado"); st.rerun()
+        df_disp = df.copy()
+        df_disp["valor_viaje"] = df_disp["valor_viaje"].apply(lambda x: f"$ {x:,.0f}".replace(",", "."))
+        st.dataframe(df_disp, use_container_width=True)
     conn.close()
