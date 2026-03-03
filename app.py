@@ -123,7 +123,7 @@ elif menu == "💸 Gastos":
         with st.form("nuevo_g"):
             c1, c2 = st.columns(2)
             v_id = int(v_data[v_data['placa'] == c1.selectbox("Vehículo", v_data['placa'])]['id'].values[0])
-            tipo = c1.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Viáticos", "Repuestos", "Otros"])
+            tipo = c1.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Viáticos", " Salarios", "Cuotas Bancarias", "Repuestos", "Otros"])
             mon = c2.number_input("Monto", min_value=0); fec = c2.date_input("Fecha"); det = st.text_input("Detalle")
             if st.form_submit_button("💾 Guardar"):
                 cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (v_id, tipo, mon, fec, det))
@@ -181,3 +181,4 @@ elif menu == "💰 Ventas":
                     cur = conn.cursor(); cur.execute("UPDATE ventas SET cliente=%s, valor_viaje=%s, descripcion=%s WHERE id=%s", (e_cli, e_v, e_dsc, int(row_s['id'])))
                     conn.commit(); st.success("Actualizado"); st.rerun()
     conn.close()
+
