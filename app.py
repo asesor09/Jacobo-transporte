@@ -71,7 +71,7 @@ if not st.session_state.logged_in:
 # --- 5. MENÚ PRINCIPAL ---
 st.sidebar.write(f"👋 Bienvenid@, **{st.session_state.u_name}**")
 st.sidebar.divider()
-target = st.sidebar.number_input("🎯 Meta Utilidad ($)", value=3000000, step=500000)
+target = st.sidebar.number_input("🎯 Meta Utilidad ($)", value=5000000, step=500000)
 menu = st.sidebar.selectbox("📂 MÓDULOS", ["📊 Dashboard", "🚐 Flota", "💸 Gastos", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Usuarios"])
 
 if st.sidebar.button("🚪 CERRAR SESIÓN"):
@@ -80,7 +80,7 @@ if st.sidebar.button("🚪 CERRAR SESIÓN"):
 # --- 6. LÓGICA DE MÓDULOS ---
 
 # --- MÓDULO: DASHBOARD ---
-if menu == "📊 Balance":
+if menu == "📊 Dashboard":
     st.title("📊 Análisis de Operación y Utilidades")
     conn = conectar_db()
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
@@ -280,4 +280,3 @@ elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
             conn = conectar_db(); cur = conn.cursor()
             cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES (%s,%s,%s,%s)", (nom, usr, clv, rol))
             conn.commit(); conn.close(); st.success("Usuario creado satisfactoriamente")
-
