@@ -28,14 +28,16 @@ def inicializar_db():
     cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES ('Jacobo Admin', 'admin', 'Jacobo2026', 'admin') ON CONFLICT (usuario) DO NOTHING")
     conn.commit(); conn.close()
 
-def to_excel(df):
+def to_excel(df_summary, df_gastos, df_ventas):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Reporte')
+        df_summary.to_excel(writer, index=False, sheet_name='Balance General')
+        df_gastos.to_excel(writer, index=False, sheet_name='Detalle Gastos')
+        df_ventas.to_excel(writer, index=False, sheet_name='Detalle Ventas')
     return output.getvalue()
 
 # --- 2. CONFIGURACIÓN ---
-st.set_page_config(page_title="C&E Eficiencias", layout="wide", page_icon="🚐")
+st.set_page_config(page_title="C&E Eficiencias", layout="wide", page_icon="💰")
 inicializar_db()
 
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
@@ -61,61 +63,71 @@ if st.sidebar.button("🚪 CERRAR SESIÓN"):
 
 menu = st.sidebar.selectbox("📂 MÓDULOS", ["📊 Dashboard", "🚐 Flota", "📑 Hoja de Vida", "💸 Gastos", "💰 Ventas", "⚙️ Usuarios"])
 
-# --- 📊 1. DASHBOARD INTERACTIVO ---
+# --- 📊 1. DASHBOARD DE UTILIDADES ---
 if menu == "📊 Dashboard":
-    st.title("📊 Análisis de Gastos y Ventas")
+    st.title("📊 Balance de Utilidades")
     
     conn = conectar_db()
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     
-    # --- SECCIÓN DE FILTROS ---
-    st.subheader("🔍 Filtros de Consulta")
+    # Filtros
+    st.subheader("🔍 Filtros de Reporte")
     c1, c2 = st.columns(2)
-    
     with c1:
         placas_lista = ["TODOS"] + v_data['placa'].tolist()
-        placa_busqueda = st.selectbox("Seleccione Vehículo:", placas_lista)
-        
+        placa_busqueda = st.selectbox("Vehículo:", placas_lista)
     with c2:
         hoy = datetime.now().date()
-        hace_mes = hoy - timedelta(days=30)
-        rango_fecha = st.date_input("Rango de Fechas:", [hace_mes, hoy])
+        rango = st.date_input("Periodo:", [hoy - timedelta(days=30), hoy])
 
-    # Lógica de consulta según filtros
-    query_g = "SELECT g.fecha, v.placa, g.tipo_gasto as concepto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s"
-    query_v = "SELECT s.fecha, v.placa, s.cliente, s.valor_viaje as monto, s.descripcion as detalle FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s"
-    
-    params = [rango_fecha[0], rango_fecha[1]] if len(rango_fecha) == 2 else [hoy, hoy]
-    
+    # Consultas
+    q_g = "SELECT g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s"
+    q_v = "SELECT s.fecha, v.placa, s.cliente, s.valor_viaje as monto, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s"
+    params = [rango[0], rango[1]] if len(rango) == 2 else [hoy, hoy]
+
     if placa_busqueda != "TODOS":
-        query_g += " AND v.placa = %s"
-        query_v += " AND v.placa = %s"
+        q_g += " AND v.placa = %s"; q_v += " AND v.placa = %s"
         params.append(placa_busqueda)
-        
-    df_g_filtro = pd.read_sql(query_g, conn, params=params)
-    df_v_filtro = pd.read_sql(query_v, conn, params=params)
+
+    df_g = pd.read_sql(q_g, conn, params=params)
+    df_v = pd.read_sql(q_v, conn, params=params)
     conn.close()
 
-    # --- MOSTRAR RESULTADOS ---
-    col_a, col_b = st.columns(2)
+    # --- CÁLCULO DE UTILIDADES ---
+    st.divider()
     
-    with col_a:
-        st.markdown(f"### 💸 Gastos de {placa_busqueda}")
-        if not df_g_filtro.empty:
-            st.dataframe(df_g_filtro, use_container_width=True, hide_index=True)
-            total_g = df_g_filtro['monto'].sum()
-            st.metric("Total Gastado", f"${total_g:,.0f}")
-        else:
-            st.info("No hay gastos en este rango.")
+    # Resumen por Placa
+    res_g = df_g.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Gastos'})
+    res_v = df_v.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Ventas'})
+    
+    # Unir todo en una tabla de utilidad
+    balance = pd.merge(res_v, res_g, on='placa', how='outer').fillna(0)
+    balance['Utilidad'] = balance['Ventas'] - balance['Gastos']
+    
+    # Métricas Principales
+    m1, m2, m3 = st.columns(3)
+    total_v = balance['Ventas'].sum()
+    total_g = balance['Gastos'].sum()
+    total_u = balance['Utilidad'].sum()
+    
+    m1.metric("Ingresos Totales", f"${total_v:,.0f}")
+    m2.metric("Gastos Totales", f"${total_g:,.0f}", delta=f"-{total_g:,.0f}", delta_color="inverse")
+    m3.metric("Utilidad Neta", f"${total_u:,.0f}", delta=f"{total_u:,.0f}")
 
-    with col_b:
-        st.markdown(f"### 💰 Ventas de {placa_busqueda}")
-        if not df_v_filtro.empty:
-            st.dataframe(df_v_filtro, use_container_width=True, hide_index=True)
-            total_v = df_v_filtro['monto'].sum()
-            st.metric("Total Ventas", f"${total_v:,.0f}")
-        else:
-            st.info("No hay ventas en este rango.")
+    st.subheader("📋 Resumen por Vehículo")
+    st.table(balance.style.format({"Ventas": "${:,.0f}", "Gastos": "${:,.0f}", "Utilidad": "${:,.0f}"}))
+
+    # Botón Excel
+    excel_data = to_excel(balance, df_g, df_v)
+    st.download_button(label="📥 Descargar Reporte en Excel", data=excel_data, file_name=f"Reporte_CE_{rango[0]}.xlsx", mime="application/vnd.ms-excel")
+
+    # Tablas Detalladas
+    with st.expander("👁️ Ver detalle de movimientos"):
+        col_x, col_y = st.columns(2)
+        col_x.write("**Gastos**")
+        col_x.dataframe(df_g, hide_index=True)
+        col_y.write("**Ventas**")
+        col_y.dataframe(df_v, hide_index=True)
 
 # --- 🚐 2. FLOTA ---
 elif menu == "🚐 Flota":
@@ -161,7 +173,7 @@ elif menu == "📑 Hoja de Vida":
 
 # --- 💸 4. GASTOS ---
 elif menu == "💸 Gastos":
-    st.title("💸 Control de Gastos")
+    st.title("💸 Gastos")
     conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     df_g = pd.read_sql('SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC', conn)
     df_g['Mes'] = pd.to_datetime(df_g['fecha']).dt.strftime('%Y-%m')
@@ -191,6 +203,9 @@ elif menu == "💸 Gastos":
                 if st.form_submit_button("✅ Actualizar"):
                     cur = conn.cursor(); cur.execute("UPDATE gastos SET monto=%s, fecha=%s, detalle=%s WHERE id=%s", (e_mon, e_fec, e_det, int(row['id'])))
                     conn.commit(); st.success("Actualizado"); st.rerun()
+                if st.form_submit_button("🗑️ Eliminar Gasto"):
+                    cur = conn.cursor(); cur.execute("DELETE FROM gastos WHERE id=%s", (int(row['id']),))
+                    conn.commit(); st.warning("Eliminado"); st.rerun()
     conn.close()
 
 # --- 💰 5. VENTAS ---
