@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import io
 import plotly.express as px
 
-# --- 1. CONFIGURACIÓN Y CONEXIÓN ---
+# --- 1. CONFIGURACIÓN Y DB ---
 DB_URL = "postgresql://neondb_owner:npg_c7Dkwlh1jzGQ@ep-lucky-shadow-ac1thtiq-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require"
 
 def conectar_db():
@@ -13,40 +13,15 @@ def conectar_db():
 
 def inicializar_db():
     conn = conectar_db(); cur = conn.cursor()
-    # 1. Tabla de Empresas (La base de todo)
-    cur.execute('CREATE TABLE IF NOT EXISTS empresas (id SERIAL PRIMARY KEY, nombre TEXT UNIQUE NOT NULL)')
-    
-    # 2. Tabla de Vehículos (Ligada a una empresa)
-    cur.execute('''CREATE TABLE IF NOT EXISTS vehiculos (
-                    id SERIAL PRIMARY KEY, 
-                    placa TEXT UNIQUE NOT NULL, 
-                    empresa_id INTEGER REFERENCES empresas(id),
-                    marca TEXT, modelo TEXT, conductor TEXT)''')
-    
-    # 3. Tablas de Operación (Se ligan al vehículo, y el vehículo a la empresa)
+    cur.execute('CREATE TABLE IF NOT EXISTS vehiculos (id SERIAL PRIMARY KEY, placa TEXT UNIQUE NOT NULL, marca TEXT, modelo TEXT, conductor TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), tipo_gasto TEXT, monto NUMERIC, fecha DATE, detalle TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, descripcion TEXT)')
-    
     cur.execute('''CREATE TABLE IF NOT EXISTS hoja_vida (
-                    id SERIAL PRIMARY KEY, 
-                    vehiculo_id INTEGER UNIQUE REFERENCES vehiculos(id), 
+                    id SERIAL PRIMARY KEY, vehiculo_id UNIQUE REFERENCES vehiculos(id), 
                     soat_vence DATE, tecno_vence DATE, prev_vence DATE,
                     p_contractual DATE, p_extracontractual DATE, p_todoriesgo DATE, t_operaciones DATE)''')
-    
-    # 4. Usuarios (Ligados a una empresa)
-    cur.execute('''CREATE TABLE IF NOT EXISTS usuarios (
-                    id SERIAL PRIMARY KEY, 
-                    empresa_id INTEGER REFERENCES empresas(id),
-                    nombre TEXT, usuario TEXT UNIQUE NOT NULL, 
-                    clave TEXT NOT NULL, rol TEXT DEFAULT 'vendedor')''')
-
-    # CREAR DATOS INICIALES (Si no existen)
-    cur.execute("INSERT INTO empresas (nombre) VALUES ('C&E Principal') ON CONFLICT DO NOTHING")
-    cur.execute("SELECT id FROM empresas WHERE nombre = 'C&E Principal'")
-    id_principal = cur.fetchone()[0]
-    
-    cur.execute("INSERT INTO usuarios (empresa_id, nombre, usuario, clave, rol) VALUES (%s, 'Admin', 'admin', 'Jacobo2026', 'admin') ON CONFLICT DO NOTHING", (id_principal,))
-    
+    cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nombre TEXT, usuario TEXT UNIQUE NOT NULL, clave TEXT NOT NULL, rol TEXT DEFAULT "vendedor")')
+    cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES ('Jacobo Admin', 'admin', 'Jacobo2026', 'admin') ON CONFLICT (usuario) DO NOTHING")
     conn.commit(); conn.close()
 
 def to_excel(df_balance, df_g, df_v):
@@ -57,10 +32,10 @@ def to_excel(df_balance, df_g, df_v):
         df_v.to_excel(writer, index=False, sheet_name='Ventas')
     return output.getvalue()
 
-st.set_page_config(page_title="C&E Multi-Empresa", layout="wide")
+st.set_page_config(page_title="C&E Eficiencias", layout="wide")
 inicializar_db()
 
-# --- 2. LOGIN ---
+# --- 2. SESIÓN Y LOGIN ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 
 if not st.session_state.logged_in:
@@ -69,31 +44,31 @@ if not st.session_state.logged_in:
     p = st.sidebar.text_input("Clave", type="password")
     if st.sidebar.button("Entrar"):
         conn = conectar_db(); cur = conn.cursor()
-        cur.execute("SELECT nombre, rol, empresa_id FROM usuarios WHERE usuario = %s AND clave = %s", (u, p))
+        cur.execute("SELECT nombre, rol FROM usuarios WHERE usuario = %s AND clave = %s", (u, p))
         res = cur.fetchone(); conn.close()
         if res:
             st.session_state.logged_in = True
-            st.session_state.u_name, st.session_state.u_rol, st.session_state.u_empresa = res[0], res[1], res[2]
+            st.session_state.u_name, st.session_state.u_rol = res[0], res[1]
             st.rerun()
         else: st.sidebar.error("Error de credenciales")
     st.stop()
 
-# --- 3. MENÚ ---
-st.sidebar.write(f"🏢 Empresa ID: {st.session_state.u_empresa}")
-menu = st.sidebar.selectbox("📂 Módulos", ["📊 Dashboard", "🚐 Mis Vehículos", "💸 Gastos", "💰 Ventas", "📑 Hoja de Vida", "🏢 Admin Empresas"])
+# --- 3. MENÚ LATERAL ---
+st.sidebar.write(f"👤 {st.session_state.u_name} ({st.session_state.u_rol})")
+st.sidebar.divider()
+meta = st.sidebar.number_input("🎯 Meta Utilidad ($)", value=5000000, step=100000)
+menu = st.sidebar.selectbox("📂 Menú", ["📊 Dashboard", "🚐 Flota", "💸 Gastos", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Usuarios"])
 
-if st.sidebar.button("🚪 Cerrar Sesión"):
+if st.sidebar.button("🚪 Salir"):
     st.session_state.logged_in = False; st.rerun()
 
-# --- 4. LÓGICA DE FILTRADO POR EMPRESA ---
-# Esta es la parte más importante: Todas las consultas llevan: WHERE empresa_id = st.session_state.u_empresa
+# --- 4. MÓDULOS ---
 
 # --- DASHBOARD ---
 if menu == "📊 Dashboard":
-    st.title(f"📊 Dashboard - {st.session_state.u_name}")
+    st.title("📊 Control Operativo")
     conn = conectar_db()
-    # Solo jalar vehículos de MI empresa
-    v_data = pd.read_sql("SELECT id, placa FROM vehiculos WHERE empresa_id = %s", conn, params=(st.session_state.u_empresa,))
+    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     
     c1, c2 = st.columns(2)
     with c1:
@@ -102,16 +77,11 @@ if menu == "📊 Dashboard":
         rango = st.date_input("Fechas:", [datetime.now().date() - timedelta(days=30), datetime.now().date()])
 
     if len(rango) == 2:
-        # Filtro de SQL que une Gastos/Ventas con Vehículos de MI empresa
-        q_g = """SELECT g.fecha, v.placa, g.tipo_gasto, g.monto 
-                 FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id 
-                 WHERE v.empresa_id = %s AND g.fecha BETWEEN %s AND %s"""
-        
-        q_v = """SELECT s.fecha, v.placa, s.valor_viaje as monto 
-                 FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id 
-                 WHERE v.empresa_id = %s AND s.fecha BETWEEN %s AND %s"""
-        
-        params = [st.session_state.u_empresa, rango[0], rango[1]]
+        # Gastos
+        q_g = "SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s"
+        # Ventas
+        q_v = "SELECT s.id, s.fecha, v.placa, s.cliente, s.valor_viaje as monto, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s"
+        params = [rango[0], rango[1]]
         
         if placa_sel != "TODOS":
             q_g += " AND v.placa = %s"; q_v += " AND v.placa = %s"
@@ -120,49 +90,91 @@ if menu == "📊 Dashboard":
         df_g = pd.read_sql(q_g, conn, params=params)
         df_v = pd.read_sql(q_v, conn, params=params)
 
-        u_neta = df_v['monto'].sum() - df_g['monto'].sum()
-        st.metric("Utilidad del Periodo", f"${u_neta:,.0f}")
+        # Totales
+        total_v = df_v['monto'].sum()
+        total_g = df_g['monto'].sum()
+        utilidad = total_v - total_g
+
+        if utilidad >= meta: st.success(f"🏆 ¡Meta superada! Utilidad: ${utilidad:,.0f}"); st.balloons()
+        else: st.warning(f"📉 Debajo de la meta. Falta: ${meta - utilidad:,.0f}")
+
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Ingresos", f"${total_v:,.0f}")
+        m2.metric("Gastos", f"${total_g:,.0f}")
+        m3.metric("Utilidad", f"${utilidad:,.0f}")
+
+        # Gráfico
+        st.subheader("📈 Comparativa por Placa")
+        res_g = df_g.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Gasto'})
+        res_v = df_v.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Venta'})
+        balance = pd.merge(res_v, res_g, on='placa', how='outer').fillna(0)
+        balance['Utilidad'] = balance['Venta'] - balance['Gasto']
         
-        fig = px.pie(df_g, values='monto', names='tipo_gasto', title="Distribución de Gastos")
-        st.plotly_chart(fig)
+        fig = px.bar(balance, x='placa', y=['Venta', 'Gasto'], barmode='group', title="Ventas vs Gastos por Vehículo")
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("📋 Detalle de Movimientos")
+        st.dataframe(df_g if not df_g.empty else "Sin gastos", use_container_width=True)
+        
+        st.download_button("📥 Enviar a Excel", data=to_excel(balance, df_g, df_v), file_name="Reporte_CE.xlsx")
     conn.close()
 
-# --- GESTIÓN DE VEHÍCULOS (Filtrado por Empresa) ---
-elif menu == "🚐 Mis Vehículos":
-    st.title("🚐 Control de Flota")
-    with st.form("add_v"):
-        placa = st.text_input("Placa").upper()
-        marca = st.text_input("Marca")
-        if st.form_submit_button("Guardar"):
-            conn = conectar_db(); cur = conn.cursor()
-            cur.execute("INSERT INTO vehiculos (placa, marca, empresa_id) VALUES (%s, %s, %s)", 
-                        (placa, marca, st.session_state.u_empresa))
-            conn.commit(); conn.close(); st.success("Vehículo registrado"); st.rerun()
+# --- GASTOS ---
+elif menu == "💸 Gastos":
+    st.title("💸 Registro de Gastos")
+    conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+    
+    with st.form("nuevo_gasto"):
+        v_id = v_data[v_data['placa'] == st.selectbox("Vehículo", v_data['placa'])]['id'].values[0]
+        tipo = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Viáticos", "Otros"])
+        monto = st.number_input("Monto", min_value=0); fecha = st.date_input("Fecha"); det = st.text_input("Detalle")
+        if st.form_submit_button("Guardar Gasto"):
+            cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (int(v_id), tipo, monto, fecha, det))
+            conn.commit(); st.success("Registrado"); st.rerun()
 
-# --- ADMIN EMPRESAS (Solo para Jacobo Admin) ---
-elif menu == "🏢 Admin Empresas":
-    if st.session_state.u_rol == "admin":
-        st.title("🏢 Gestión de Clientes (Empresas)")
-        with st.form("new_emp"):
-            nombre_e = st.text_input("Nombre de la Nueva Empresa")
-            if st.form_submit_button("Crear Empresa"):
-                conn = conectar_db(); cur = conn.cursor()
-                cur.execute("INSERT INTO empresas (nombre) VALUES (%s)", (nombre_e,))
-                conn.commit(); conn.close(); st.success(f"Empresa {nombre_e} creada")
-        
-        st.subheader("👥 Crear Usuario para Cliente")
-        conn = conectar_db()
-        empresas = pd.read_sql("SELECT * FROM empresas", conn)
-        with st.form("new_user"):
-            e_id = st.selectbox("Asignar a Empresa", empresas['nombre'])
-            id_e = empresas[empresas['nombre'] == e_id]['id'].values[0]
-            nom_u = st.text_input("Nombre")
-            usr_u = st.text_input("Usuario (Login)")
-            psw_u = st.text_input("Clave")
-            if st.form_submit_button("Crear Acceso"):
-                cur = conn.cursor()
-                cur.execute("INSERT INTO usuarios (empresa_id, nombre, usuario, clave) VALUES (%s, %s, %s, %s)",
-                            (int(id_e), nom_u, usr_u, psw_u))
-                conn.commit(); conn.close(); st.success("Usuario creado")
-    else:
-        st.error("No tienes permisos para ver este módulo.")
+    df_edit = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
+    sel = st.dataframe(df_edit, use_container_width=True, on_select="rerun", selection_mode="single-row")
+    
+    if len(sel.selection.rows) > 0:
+        row = df_edit.iloc[sel.selection.rows[0]]
+        with st.form("edit_g"):
+            new_m = st.number_input("Monto", value=float(row['monto']))
+            if st.form_submit_button("Actualizar"):
+                cur = conn.cursor(); cur.execute("UPDATE gastos SET monto=%s WHERE id=%s", (new_m, int(row['id'])))
+                conn.commit(); st.rerun()
+            if st.form_submit_button("🗑️ Eliminar"):
+                cur = conn.cursor(); cur.execute("DELETE FROM gastos WHERE id=%s", (int(row['id']),))
+                conn.commit(); st.rerun()
+    conn.close()
+
+# --- VENTAS ---
+elif menu == "💰 Ventas":
+    st.title("💰 Registro de Ventas")
+    conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+    with st.form("nueva_v"):
+        v_id = v_data[v_data['placa'] == st.selectbox("Vehículo", v_data['placa'])]['id'].values[0]
+        cli = st.text_input("Cliente"); val = st.number_input("Valor Viaje", min_value=0); fec = st.date_input("Fecha"); dsc = st.text_input("Descripción")
+        if st.form_submit_button("Guardar Venta"):
+            cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion) VALUES (%s,%s,%s,%s,%s)", (int(v_id), cli, val, fec, dsc))
+            conn.commit(); st.success("Venta guardada"); st.rerun()
+    conn.close()
+
+# --- FLOTA ---
+elif menu == "🚐 Flota":
+    st.title("🚐 Control de Flota")
+    with st.form("f"):
+        p = st.text_input("Placa").upper(); m = st.text_input("Marca"); mod = st.text_input("Modelo"); c = st.text_input("Conductor")
+        if st.form_submit_button("Añadir Vehículo"):
+            conn = conectar_db(); cur = conn.cursor()
+            cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, c))
+            conn.commit(); conn.close(); st.rerun()
+
+# --- USUARIOS ---
+elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
+    st.title("⚙️ Gestión de Usuarios")
+    with st.form("u"):
+        nom = st.text_input("Nombre Full"); usr = st.text_input("Usuario"); clv = st.text_input("Clave"); rol = st.selectbox("Rol", ["vendedor", "admin"])
+        if st.form_submit_button("Crear"):
+            conn = conectar_db(); cur = conn.cursor()
+            cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES (%s,%s,%s,%s)", (nom, usr, clv, rol))
+            conn.commit(); conn.close(); st.success("Usuario creado")
