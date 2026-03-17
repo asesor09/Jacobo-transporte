@@ -12,14 +12,15 @@ def conectar_db():
     return psycopg2.connect(DB_URL)
 
 def inicializar_db():
-    conn = conectar_db(); cur = conn.cursor()
+    conn = conectar_db()
+    cur = conn.cursor()
     # Tabla de Vehículos
     cur.execute('CREATE TABLE IF NOT EXISTS vehiculos (id SERIAL PRIMARY KEY, placa TEXT UNIQUE NOT NULL, marca TEXT, modelo TEXT, conductor TEXT)')
     # Tabla de Gastos
     cur.execute('CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), tipo_gasto TEXT, monto NUMERIC, fecha DATE, detalle TEXT)')
     # Tabla de Ventas
     cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, descripcion TEXT)')
-    # Tabla Hoja de Vida (CORREGIDA)
+    # Tabla Hoja de Vida
     cur.execute('''CREATE TABLE IF NOT EXISTS hoja_vida (
                     id SERIAL PRIMARY KEY, 
                     vehiculo_id INTEGER UNIQUE REFERENCES vehiculos(id), 
@@ -29,13 +30,18 @@ def inicializar_db():
     cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nombre TEXT, usuario TEXT UNIQUE NOT NULL, clave TEXT NOT NULL, rol TEXT DEFAULT "vendedor")')
     cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES ('Jacobo Admin', 'admin', 'Jacobo2026', 'admin') ON CONFLICT (usuario) DO NOTHING")
     
-    # Asegurar que las columnas nuevas existan en Hoja de Vida
-    columnas_extra = ["p_contractual", "p_extracontractual", "p_todoriesgo", "t_operaciones"]
-    for col in columnas_extra:
-        try: cur.execute(f"ALTER TABLE hoja_vida ADD COLUMN {col} DATE")
-        except: conn.rollback()
-        
-    conn.commit(); conn.close()
+    # Asegurar columnas mediante SQL robusto para evitar errores de duplicidad
+    columnas_extra = [("p_contractual", "DATE"), ("p_extracontractual", "DATE"), ("p_todoriesgo", "DATE"), ("t_operaciones", "DATE")]
+    for col, tipo in columnas_extra:
+        try:
+            cur.execute(f"ALTER TABLE hoja_vida ADD COLUMN {col} {tipo}")
+        except psycopg2.errors.DuplicateColumn:
+            conn.rollback()
+        except Exception:
+            conn.rollback()
+    
+    conn.commit()
+    conn.close()
 
 # --- 2. FUNCIONES DE APOYO ---
 def to_excel(df_balance, df_g, df_v):
@@ -79,13 +85,13 @@ if st.sidebar.button("🚪 CERRAR SESIÓN"):
 
 # --- 6. LÓGICA DE MÓDULOS ---
 
+conn = conectar_db()
+
 # --- MÓDULO: DASHBOARD ---
 if menu == "📊 Dashboard":
     st.title("📊 Análisis de Operación y Utilidades")
-    conn = conectar_db()
     v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     
-    # Filtros superiores
     c1, c2 = st.columns(2)
     with c1:
         placa_f = st.selectbox("Seleccione Vehículo:", ["TODOS"] + v_data['placa'].tolist())
@@ -93,7 +99,6 @@ if menu == "📊 Dashboard":
         rango = st.date_input("Rango de Fechas:", [datetime.now().date() - timedelta(days=30), datetime.now().date()])
 
     if len(rango) == 2:
-        # Carga de datos filtrados
         q_g = "SELECT g.fecha, v.placa, g.tipo_gasto as concepto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s"
         q_v = "SELECT s.fecha, v.placa, s.cliente, s.valor_viaje as monto, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s"
         params = [rango[0], rango[1]]
@@ -105,179 +110,113 @@ if menu == "📊 Dashboard":
         df_g = pd.read_sql(q_g, conn, params=params)
         df_v = pd.read_sql(q_v, conn, params=params)
 
-        # Cálculo de Utilidad
         sum_v = df_v['monto'].sum()
         sum_g = df_g['monto'].sum()
         utilidad_neta = sum_v - sum_g
         dif_meta = utilidad_neta - target
 
         st.divider()
-        # Semáforo de Metas
         if utilidad_neta >= target:
-            st.success(f"### 🏆 ¡META ALCANZADA! \n Utilidad: **${utilidad_neta:,.0f}** | Superas el objetivo por: **${dif_meta:,.0f}**")
+            st.success(f"### 🏆 ¡META ALCANZADA! \n Utilidad: **${utilidad_neta:,.0f}**")
             st.balloons()
         else:
-            st.error(f"### ⚠️ POR DEBAJO DE LA META \n Utilidad: **${utilidad_neta:,.0f}** | Faltan: **${abs(dif_meta):,.0f}** para el objetivo de ${target:,.0f}")
+            st.error(f"### ⚠️ POR DEBAJO DE LA META \n Faltan: **${abs(dif_meta):,.0f}**")
 
-        # Métricas visuales
         m1, m2, m3 = st.columns(3)
         m1.metric("Ingresos (Ventas)", f"${sum_v:,.0f}")
         m2.metric("Egresos (Gastos)", f"${sum_g:,.0f}", delta=f"-{sum_g:,.0f}", delta_color="inverse")
         m3.metric("Utilidad Neta", f"${utilidad_neta:,.0f}", delta=f"{dif_meta:,.0f}")
 
-        # Gráfico Comparativo
         st.subheader("📈 Comparativa por Vehículo")
         res_g = df_g.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Gasto'})
         res_v = df_v.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Venta'})
         balance_df = pd.merge(res_v, res_g, on='placa', how='outer').fillna(0)
-        balance_df['Utilidad'] = balance_df['Venta'] - balance_df['Gasto']
         
-        fig = px.bar(balance_df, x='placa', y=['Venta', 'Gasto'], barmode='group', color_discrete_map={'Venta': '#2ecc71', 'Gasto': '#e74c3c'})
+        fig = px.bar(balance_df, x='placa', y=['Venta', 'Gasto'], barmode='group')
         st.plotly_chart(fig, use_container_width=True)
-
-        # Botón Excel
-        st.download_button("📥 Descargar Reporte Completo (Excel)", data=to_excel(balance_df, df_g, df_v), file_name=f"Reporte_CE_{rango[0]}_al_{rango[1]}.xlsx")
-        
-        # Detalle Tabular
-        with st.expander("🔍 Ver detalles de cada movimiento"):
-            st.write("**Gastos:**")
-            st.dataframe(df_g, use_container_width=True, hide_index=True)
-            st.write("**Ventas:**")
-            st.dataframe(df_v, use_container_width=True, hide_index=True)
-    conn.close()
+        st.download_button("📥 Excel", data=to_excel(balance_df, df_g, df_v), file_name="Reporte.xlsx")
 
 # --- MÓDULO: GASTOS ---
 elif menu == "💸 Gastos":
-    st.title("💸 Registro y Control de Gastos")
-    conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    
-    tab1, tab2 = st.tabs(["📝 Nuevo Gasto", "✏️ Gestionar Registros"])
+    st.title("💸 Registro de Gastos")
+    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+    tab1, tab2 = st.tabs(["📝 Nuevo Gasto", "✏️ Gestionar"])
     
     with tab1:
-        if not v_data.empty:
-            with st.form("form_g"):
-                v_sel = st.selectbox("Vehículo", v_data['placa'])
-                v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
-                tipo = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Viáticos", "Otros"])
-                monto = st.number_input("Valor ($)", min_value=0)
-                fecha = st.date_input("Fecha")
-                det = st.text_input("Nota/Detalle")
-                if st.form_submit_button("💾 Guardar Gasto"):
-                    cur = conn.cursor()
-                    cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (int(v_id), tipo, monto, fecha, det))
-                    conn.commit(); st.success("Registrado correctamente"); st.rerun()
-        else: st.warning("Primero crea vehículos en el módulo Flota.")
+        with st.form("form_g"):
+            v_sel = st.selectbox("Vehículo", v_data['placa'])
+            v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
+            tipo = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Otros"])
+            monto = st.number_input("Valor", min_value=0)
+            fecha = st.date_input("Fecha")
+            det = st.text_input("Detalle")
+            if st.form_submit_button("Guardar"):
+                cur = conn.cursor()
+                cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (int(v_id), tipo, monto, fecha, det))
+                conn.commit(); st.rerun()
 
     with tab2:
         df_edit = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
         event = st.dataframe(df_edit, use_container_width=True, on_select="rerun", selection_mode="single-row", hide_index=True)
-        
         if len(event.selection.rows) > 0:
-            idx = event.selection.rows[0]
-            row = df_edit.iloc[idx]
-            st.divider()
-            st.write(f"**Modificando Gasto ID: {row['id']}**")
-            with st.form("form_edit"):
-                new_val = st.number_input("Monto", value=float(row['monto']))
-                new_det = st.text_input("Detalle", value=row['detalle'])
-                c1, c2 = st.columns(2)
-                if c1.form_submit_button("✅ Actualizar"):
-                    cur = conn.cursor(); cur.execute("UPDATE gastos SET monto=%s, detalle=%s WHERE id=%s", (new_val, new_det, int(row['id'])))
+            row = df_edit.iloc[event.selection.rows[0]]
+            with st.form("edit_g"):
+                n_m = st.number_input("Monto", value=float(row['monto']))
+                if st.form_submit_button("Actualizar"):
+                    cur = conn.cursor(); cur.execute("UPDATE gastos SET monto=%s WHERE id=%s", (n_m, int(row['id'])))
                     conn.commit(); st.rerun()
-                if c2.form_submit_button("🗑️ ELIMINAR"):
-                    cur = conn.cursor(); cur.execute("DELETE FROM gastos WHERE id=%s", (int(row['id']),))
-                    conn.commit(); st.warning("Registro borrado"); st.rerun()
-    conn.close()
 
 # --- MÓDULO: VENTAS ---
 elif menu == "💰 Ventas":
-    st.title("💰 Control de Ingresos por Viajes")
-    conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
-    
+    st.title("💰 Registro de Ventas")
+    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
     with st.form("form_v"):
         v_sel = st.selectbox("Vehículo", v_data['placa'])
         v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
-        cli = st.text_input("Cliente / Empresa")
-        val = st.number_input("Valor del Viaje", min_value=0)
+        cli = st.text_input("Cliente")
+        val = st.number_input("Valor", min_value=0)
         fec = st.date_input("Fecha")
-        dsc = st.text_input("Descripción del Viaje")
-        if st.form_submit_button("💰 Registrar Venta"):
-            cur = conn.cursor()
-            cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion) VALUES (%s,%s,%s,%s,%s)", (int(v_id), cli, val, fec, dsc))
-            conn.commit(); st.success("Venta guardada"); st.rerun()
-    
-    df_v_list = pd.read_sql("SELECT s.fecha, v.placa, s.cliente, s.valor_viaje, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.fecha DESC", conn)
-    st.dataframe(df_v_list, use_container_width=True, hide_index=True)
-    conn.close()
+        if st.form_submit_button("Registrar"):
+            cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha) VALUES (%s,%s,%s,%s)", (int(v_id), cli, val, fec))
+            conn.commit(); st.rerun()
+    st.dataframe(pd.read_sql("SELECT v.placa, s.cliente, s.valor_viaje, s.fecha FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id", conn), use_container_width=True)
 
 # --- MÓDULO: FLOTA ---
 elif menu == "🚐 Flota":
-    st.title("🚐 Administración de Vehículos")
+    st.title("🚐 Flota")
     with st.form("form_f"):
-        p = st.text_input("Placa (Ej: XYZ123)").upper()
+        p = st.text_input("Placa").upper()
         m = st.text_input("Marca")
-        mod = st.text_input("Modelo")
-        cond = st.text_input("Conductor Asignado")
-        if st.form_submit_button("➕ Añadir Carro"):
-            conn = conectar_db(); cur = conn.cursor()
-            cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, cond))
-            conn.commit(); conn.close(); st.success("Vehículo añadido"); st.rerun()
-    
-    conn = conectar_db()
-    st.dataframe(pd.read_sql("SELECT placa, marca, modelo, conductor FROM vehiculos", conn), use_container_width=True)
-    conn.close()
+        if st.form_submit_button("Añadir"):
+            cur = conn.cursor(); cur.execute("INSERT INTO vehiculos (placa, marca) VALUES (%s,%s)", (p, m))
+            conn.commit(); st.rerun()
+    st.dataframe(pd.read_sql("SELECT * FROM vehiculos", conn), use_container_width=True)
 
 # --- MÓDULO: HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
-    st.title("📑 Documentación y Vencimientos")
-    conn = conectar_db(); v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+    st.title("📑 Vencimientos")
+    v_data = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
+    v_sel = st.selectbox("Vehículo", v_data['placa'])
+    v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
     
-    with st.expander("📅 Actualizar Fechas de Vencimiento"):
-        with st.form("form_hv"):
-            v_sel = st.selectbox("Vehículo", v_data['placa'])
-            v_id = v_data[v_data['placa'] == v_sel]['id'].values[0]
-            c1, c2 = st.columns(2)
-            s_v = c1.date_input("SOAT"); t_v = c1.date_input("Tecnomecánica"); p_v = c1.date_input("Preventivo")
-            pc_v = c2.date_input("Póliza Contractual"); pe_v = c2.date_input("Póliza Extracontractual")
-            ptr_v = c2.date_input("Póliza Todo Riesgo"); to_v = st.date_input("Tarjeta de Operaciones")
-            if st.form_submit_button("🔄 Actualizar"):
-                cur = conn.cursor()
-                cur.execute('''INSERT INTO hoja_vida (vehiculo_id, soat_vence, tecno_vence, prev_vence, p_contractual, p_extracontractual, p_todoriesgo, t_operaciones) 
-                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s) 
-                               ON CONFLICT (vehiculo_id) DO UPDATE SET 
-                               soat_vence=EXCLUDED.soat_vence, tecno_vence=EXCLUDED.tecno_vence, prev_vence=EXCLUDED.prev_vence, 
-                               p_contractual=EXCLUDED.p_contractual, p_extracontractual=EXCLUDED.p_extracontractual, 
-                               p_todoriesgo=EXCLUDED.p_todoriesgo, t_operaciones=EXCLUDED.t_operaciones''', 
-                            (int(v_id), s_v, t_v, p_v, pc_v, pe_v, ptr_v, to_v))
-                conn.commit(); st.success("Vencimientos actualizados"); st.rerun()
-
-    # Visualización de alarmas
-    df_hv = pd.read_sql('''SELECT v.placa, h.soat_vence, h.tecno_vence, h.prev_vence, h.p_contractual, h.p_extracontractual, h.p_todoriesgo, h.t_operaciones 
-                           FROM vehiculos v LEFT JOIN hoja_vida h ON v.id = h.vehiculo_id''', conn)
-    hoy = datetime.now().date()
-    for _, row in df_hv.iterrows():
-        with st.container():
-            st.subheader(f"Vehículo: {row['placa']}")
-            cols = st.columns(4)
-            docs = [("SOAT", row['soat_vence']), ("TECNO", row['tecno_vence']), ("PREV", row['prev_vence']), ("T.OPER", row['t_operaciones']),
-                    ("POL. CONT", row['p_contractual']), ("POL. EXTRA", row['p_extracontractual']), ("TODO RIESGO", row['p_todoriesgo'])]
-            for i, (name, fecha) in enumerate(docs):
-                col_idx = i % 4
-                if fecha:
-                    dias = (fecha - hoy).days
-                    if dias < 0: cols[col_idx].error(f"❌ {name} VENCIDO")
-                    elif dias <= 15: cols[col_idx].warning(f"⚠️ {name} ({dias} días)")
-                    else: cols[col_idx].success(f"✅ {name} OK")
-                else: cols[col_idx].info(f"⚪ {name}: Sin fecha")
-    conn.close()
+    with st.form("form_hv"):
+        s_v = st.date_input("SOAT"); t_v = st.date_input("Tecno")
+        if st.form_submit_button("Actualizar"):
+            cur = conn.cursor()
+            cur.execute("INSERT INTO hoja_vida (vehiculo_id, soat_vence, tecno_vence) VALUES (%s,%s,%s) ON CONFLICT (vehiculo_id) DO UPDATE SET soat_vence=EXCLUDED.soat_vence", (int(v_id), s_v, t_v))
+            conn.commit(); st.rerun()
 
 # --- MÓDULO: USUARIOS ---
-elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
-    st.title("⚙️ Gestión de Personal")
-    with st.form("form_u"):
-        nom = st.text_input("Nombre Completo"); usr = st.text_input("Usuario"); clv = st.text_input("Clave"); rol = st.selectbox("Rol", ["vendedor", "admin"])
-        if st.form_submit_button("👤 Crear Usuario"):
-            conn = conectar_db(); cur = conn.cursor()
-            cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES (%s,%s,%s,%s)", (nom, usr, clv, rol))
-            conn.commit(); conn.close(); st.success("Usuario creado satisfactoriamente")
+elif menu == "⚙️ Usuarios":
+    if st.session_state.u_rol == "admin":
+        st.title("⚙️ Usuarios")
+        with st.form("u"):
+            un = st.text_input("Nombre"); us = st.text_input("User"); cl = st.text_input("Pass"); ro = st.selectbox("Rol", ["vendedor", "admin"])
+            if st.form_submit_button("Crear"):
+                cur = conn.cursor(); cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES (%s,%s,%s,%s)", (un, us, cl, ro))
+                conn.commit(); st.success("Creado")
+        st.dataframe(pd.read_sql("SELECT nombre, usuario, rol FROM usuarios", conn))
+    else:
+        st.error("Acceso restringido a administradores.")
 
+conn.close()
