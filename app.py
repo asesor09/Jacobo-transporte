@@ -90,9 +90,9 @@ if menu == "📊 Dashboard":
         dif_meta = utilidad_neta - target
 
         if utilidad_neta >= target:
-            st.success(f"### 🏆 ¡META ALCANZADA! \n Utilidad: **${utilidad_neta:,.0f}** | Superas por: **${dif_meta:,.0f}**"); st.balloons()
+            st.success(f"### 🏆 ¡META ALCANZADA! \n Utilidad: **${utilidad_neta:,.0f}**"); st.balloons()
         else:
-            st.error(f"### ⚠️ POR DEBAJO DE LA META \n Utilidad: **${utilidad_neta:,.0f}** | Faltan: **${abs(dif_meta):,.0f}**")
+            st.error(f"### ⚠️ POR DEBAJO DE LA META \n Faltan: **${abs(dif_meta):,.0f}**")
 
         m1, m2, m3 = st.columns(3)
         m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}"); m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse"); m3.metric("Utilidad", f"${utilidad_neta:,.0f}", delta=f"{dif_meta:,.0f}")
@@ -101,23 +101,23 @@ if menu == "📊 Dashboard":
         res_v = df_v.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Venta'})
         balance_df = pd.merge(res_v, res_g, on='placa', how='outer').fillna(0)
         st.plotly_chart(px.bar(balance_df, x='placa', y=['Venta', 'Gasto'], barmode='group'), use_container_width=True)
-        st.download_button("📥 Excel", data=to_excel(balance_df, df_g, df_v), file_name="Reporte.xlsx")
 
 # --- MÓDULO: FLOTA ---
 elif menu == "🚐 Flota":
     st.title("🚐 Administración de Vehículos")
     with st.form("f_f"):
         c1, c2 = st.columns(2)
-        p, m = c1.text_input("Placa").upper(), c1.text_input("Marca")
-        mod, cond = c2.text_input("Modelo"), c2.text_input("Conductor")
+        p, m, mod, cond = c1.text_input("Placa").upper(), c1.text_input("Marca"), c2.text_input("Modelo"), c2.text_input("Conductor")
         if st.form_submit_button("➕ Añadir Carro"):
             cur = conn.cursor(); cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, cond)); conn.commit(); st.rerun()
     
-    st.subheader("✏️ Editor Maestro de Flota")
+    st.subheader("✏️ Editor Maestro (Borrar filas con 'Suprimir')")
     df_f = pd.read_sql("SELECT id, placa, marca, modelo, conductor FROM vehiculos", conn)
-    ed_f = st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True)
-    if st.button("💾 Guardar Cambios en Flota"):
+    ed_f = st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True, num_rows="dynamic")
+    if st.button("💾 Guardar Cambios y Eliminaciones"):
         cur = conn.cursor()
+        ids_vivos = ed_f['id'].tolist()
+        cur.execute(f"DELETE FROM vehiculos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
         for _, r in ed_f.iterrows():
             cur.execute("UPDATE vehiculos SET placa=%s, marca=%s, modelo=%s, conductor=%s WHERE id=%s", (r['placa'], r['marca'], r['modelo'], r['conductor'], int(r['id'])))
         conn.commit(); st.success("Flota actualizada"); st.rerun()
@@ -133,15 +133,17 @@ elif menu == "💸 Gastos":
             v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
             cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (int(v_id), tipo, mon, fec, det)); conn.commit(); st.rerun()
     
-    st.subheader("✏️ Editor de Gastos")
+    st.subheader("✏️ Editor y Borrado de Gastos")
     df_g_ed = pd.read_sql("SELECT g.id, v.placa, g.tipo_gasto, g.monto, g.fecha, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id", conn)
-    ed_g = st.data_editor(df_g_ed, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True)
-    if st.button("💾 Guardar Cambios en Gastos"):
+    ed_g = st.data_editor(df_g_ed, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
+    if st.button("💾 Aplicar Cambios"):
         cur = conn.cursor()
+        ids_vivos = ed_g['id'].tolist()
+        cur.execute(f"DELETE FROM gastos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
         for _, r in ed_g.iterrows():
             v_id_n = v_query[v_query['placa'] == r['placa']]['id'].values[0]
             cur.execute("UPDATE gastos SET vehiculo_id=%s, tipo_gasto=%s, monto=%s, fecha=%s, detalle=%s WHERE id=%s", (int(v_id_n), r['tipo_gasto'], r['monto'], r['fecha'], r['detalle'], int(r['id'])))
-        conn.commit(); st.success("Gastos actualizados"); st.rerun()
+        conn.commit(); st.success("Cambios aplicados"); st.rerun()
 
 # --- MÓDULO: VENTAS ---
 elif menu == "💰 Ventas":
@@ -153,15 +155,17 @@ elif menu == "💰 Ventas":
             v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
             cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion) VALUES (%s,%s,%s,%s,%s)", (int(v_id), cli, val, fec, dsc)); conn.commit(); st.rerun()
     
-    st.subheader("✏️ Editor de Ventas")
+    st.subheader("✏️ Editor Maestro de Ventas")
     df_v_ed = pd.read_sql("SELECT s.id, v.placa, s.cliente, s.valor_viaje as monto, s.fecha, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id", conn)
-    ed_v = st.data_editor(df_v_ed, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True)
-    if st.button("💾 Guardar Cambios en Ventas"):
+    ed_v = st.data_editor(df_v_ed, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
+    if st.button("💾 Guardar Cambios"):
         cur = conn.cursor()
+        ids_vivos = ed_v['id'].tolist()
+        cur.execute(f"DELETE FROM ventas WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
         for _, r in ed_v.iterrows():
             v_id_n = v_query[v_query['placa'] == r['placa']]['id'].values[0]
             cur.execute("UPDATE ventas SET vehiculo_id=%s, cliente=%s, valor_viaje=%s, fecha=%s, descripcion=%s WHERE id=%s", (int(v_id_n), r['cliente'], r['monto'], r['fecha'], r['descripcion'], int(r['id'])))
-        conn.commit(); st.success("Ventas sincronizadas"); st.rerun()
+        conn.commit(); st.rerun()
 
 # --- MÓDULO: HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
