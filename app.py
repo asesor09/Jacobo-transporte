@@ -38,34 +38,42 @@ def inicializar_db():
     cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES ('Jacobo Admin', 'admin', 'Jacobo2026', 'admin') ON CONFLICT (usuario) DO NOTHING")
     conn.commit(); conn.close()
 
-# --- 2. LÓGICA DE NOTIFICACIONES ---
+# --- 2. LÓGICA DE NOTIFICACIONES (CORREGIDA PARA TU CLAVE) ---
 def enviar_alertas_sistema(mensaje):
     try:
         conn = conectar_db(); cur = conn.cursor()
         cur.execute("SELECT * FROM configuracion WHERE id = 1")
         conf = cur.fetchone(); conn.close()
         if not conf or not conf[1]:
-            st.error("⚠️ Datos de remitente incompletos en 'Config. Alertas'")
+            st.error("⚠️ Datos incompletos en 'Config. Alertas'")
             return
         
-        # Proceso de envío de Correo
-        msg = MIMEText(mensaje); msg['Subject'] = '⚠️ ALERTA VENCIMIENTOS - C&E'; msg['From'] = conf[1]; msg['To'] = conf[3]
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            # LIMPIEZA AUTOMÁTICA DE ESPACIOS EN LA CLAVE
-            clave_limpia = conf[2].replace(" ", "").strip()
-            # LIMPIEZA DEL CORREO REMITENTE
-            correo_remitente = conf[1].strip()
-            server.login(correo_remitente, clave_limpia)
-            server.sendmail(correo_remitente, conf[3].strip(), msg.as_string())
+        # --- LIMPIEZA EXTREMA DE CREDENCIALES ---
+        # Esto quita espacios, saltos de línea y cualquier carácter invisible
+        remitente_limpio = "".join(conf[1].split())
+        clave_limpia = "".join(conf[2].split())
+        destino_limpio = "".join(conf[3].split())
+
+        msg = MIMEText(mensaje)
+        msg['Subject'] = '⚠️ ALERTA VENCIMIENTOS - C&E'
+        msg['From'] = remitente_limpio
+        msg['To'] = destino_limpio
+
+        # Conexión Segura con Gmail
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.login(remitente_limpio, clave_limpia)
+        server.sendmail(remitente_limpio, destino_limpio, msg.as_string())
+        server.quit()
         
-        # Proceso de envío WhatsApp
+        # WhatsApp (Twilio)
         if TWILIO_INSTALADO and conf[4] and conf[4].strip() != "":
             client = Client(conf[4].strip(), conf[5].strip())
             client.messages.create(body=mensaje, from_=conf[6].strip(), to=conf[7].strip())
-        st.success("✅ Reporte enviado con éxito.")
+            
+        st.success("✅ Reporte enviado con éxito a " + destino_limpio)
     except Exception as e: 
         st.error(f"❌ Error de Autenticación: {e}")
-        st.info("Asegúrate de que el Gmail Remitente sea el mismo que generó la clave 'zunp swmy hyoe fhay'.")
+        st.warning("⚠️ IMPORTANTE: El correo remitente en la configuración DEBE ser el mismo que generó la clave zunp swmy hyoe fhay.")
 
 # --- 3. FUNCIONES DE APOYO ---
 def to_excel(df_balance, df_g, df_v):
@@ -108,7 +116,7 @@ v_query = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
 
 # --- MÓDULO: CONFIGURACIÓN ALERTAS ---
 if menu == "🔒 Config. Alertas":
-    st.title("🔒 Configuración Protegida")
+    st.title("🔒 Configuración de Notificaciones")
     cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1"); act = cur.fetchone()
     with st.form("f_conf"):
         c1, c2 = st.columns(2)
@@ -125,7 +133,7 @@ if menu == "🔒 Config. Alertas":
                            email_remitente=EXCLUDED.email_remitente, email_clave=EXCLUDED.email_clave, email_destino=EXCLUDED.email_destino,
                            twilio_sid=EXCLUDED.twilio_sid, twilio_token=EXCLUDED.twilio_token, twilio_whatsapp_de=EXCLUDED.twilio_whatsapp_de, whatsapp_a=EXCLUDED.whatsapp_a''',
                         (rem, cla, des, sid, tok, f_w, t_w))
-            conn.commit(); st.success("Configuración guardada."); st.rerun()
+            conn.commit(); st.success("Configuración guardada correctamente."); st.rerun()
 
 # --- DASHBOARD ---
 elif menu == "📊 Dashboard":
@@ -157,14 +165,14 @@ elif menu == "📊 Dashboard":
 
 # --- FLOTA ---
 elif menu == "🚐 Flota":
-    st.title("🚐 Flota")
+    st.title("🚐 Administración de Flota")
     with st.form("f_flota"):
         p, m, mod, cond = st.text_input("Placa").upper(), st.text_input("Marca"), st.text_input("Modelo"), st.text_input("Conductor")
         if st.form_submit_button("➕ Añadir"):
             cur = conn.cursor(); cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, cond)); conn.commit(); st.rerun()
     df_f = pd.read_sql("SELECT id, placa, marca, modelo, conductor FROM vehiculos", conn)
     ed_f = st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True, num_rows="dynamic")
-    if st.button("💾 Guardar Cambios"):
+    if st.button("💾 Guardar Cambios Flota"):
         cur = conn.cursor(); ids_vivos = ed_f['id'].tolist()
         cur.execute(f"DELETE FROM vehiculos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
         for _, r in ed_f.iterrows(): cur.execute("UPDATE vehiculos SET placa=%s, marca=%s, modelo=%s, conductor=%s WHERE id=%s", (r['placa'], r['marca'], r['modelo'], r['conductor'], int(r['id'])))
@@ -172,7 +180,7 @@ elif menu == "🚐 Flota":
 
 # --- GASTOS ---
 elif menu == "💸 Gastos":
-    st.title("💸 Gastos")
+    st.title("💸 Registro de Gastos")
     tab1, tab2 = st.tabs(["📝 Nuevo", "✏️ Editar/Borrar"])
     with tab1:
         with st.form("fg"):
@@ -185,7 +193,7 @@ elif menu == "💸 Gastos":
     with tab2:
         df_ge = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
         ed_g = st.data_editor(df_ge, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
-        if st.button("💾 Guardar"):
+        if st.button("💾 Guardar Cambios Gastos"):
             cur = conn.cursor(); ids_vivos = ed_g['id'].tolist()
             cur.execute(f"DELETE FROM gastos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
             for _, r in ed_g.iterrows():
@@ -195,8 +203,8 @@ elif menu == "💸 Gastos":
 
 # --- VENTAS ---
 elif menu == "💰 Ventas":
-    st.title("💰 Ventas")
-    tab1, tab2 = st.tabs(["💰 Nuevo", "✏️ Editar"])
+    st.title("💰 Control de Ventas")
+    tab1, tab2 = st.tabs(["💰 Nuevo Registro", "✏️ Editar"])
     with tab1:
         with st.form("fv"):
             v_sel = st.selectbox("Vehículo", v_query['placa'])
@@ -217,11 +225,11 @@ elif menu == "💰 Ventas":
 
 # --- HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
-    st.title("📑 Vencimientos")
+    st.title("📑 Vencimientos y Documentos")
     if st.button("🔔 Enviar Reporte Ahora"):
         hoy = datetime.now().date()
         df_al = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
-        msg, alert = "🚨 REPORTE VENCIMIENTOS:\n", False
+        msg, alert = "🚨 REPORTE VENCIMIENTOS C&E:\n", False
         for _, r in df_al.iterrows():
             for doc, f in [("SOAT", r[2]), ("TECNO", r[3]), ("PREV", r[4])]:
                 if f:
@@ -250,7 +258,7 @@ elif menu == "📑 Hoja de Vida":
                 else: cols[i%4].success(f"✅ {n} OK")
             else: cols[i%4].info(f"⚪ {n}: S/D")
 
-# --- MÓDULO: USUARIOS ---
+# --- USUARIOS ---
 elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
     st.title("⚙️ Gestión de Usuarios")
     with st.form("fu"):
