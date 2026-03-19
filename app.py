@@ -51,19 +51,21 @@ def enviar_alertas_sistema(mensaje):
         # Proceso de envío de Correo
         msg = MIMEText(mensaje); msg['Subject'] = '⚠️ ALERTA VENCIMIENTOS - C&E'; msg['From'] = conf[1]; msg['To'] = conf[3]
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            # Quitamos espacios por si acaso se pegaron con espacios
-            clave_limpia = conf[2].replace(" ", "")
-            server.login(conf[1], clave_limpia)
-            server.sendmail(conf[1], conf[3], msg.as_string())
+            # LIMPIEZA AUTOMÁTICA DE ESPACIOS EN LA CLAVE
+            clave_limpia = conf[2].replace(" ", "").strip()
+            # LIMPIEZA DEL CORREO REMITENTE
+            correo_remitente = conf[1].strip()
+            server.login(correo_remitente, clave_limpia)
+            server.sendmail(correo_remitente, conf[3].strip(), msg.as_string())
         
         # Proceso de envío WhatsApp
-        if TWILIO_INSTALADO and conf[4] and conf[4] != "":
-            client = Client(conf[4], conf[5])
-            client.messages.create(body=mensaje, from_=conf[6], to=conf[7])
+        if TWILIO_INSTALADO and conf[4] and conf[4].strip() != "":
+            client = Client(conf[4].strip(), conf[5].strip())
+            client.messages.create(body=mensaje, from_=conf[6].strip(), to=conf[7].strip())
         st.success("✅ Reporte enviado con éxito.")
     except Exception as e: 
         st.error(f"❌ Error de Autenticación: {e}")
-        st.info("Revisa que el correo remitente y la clave de 16 letras sean correctos en el módulo de Configuración.")
+        st.info("Asegúrate de que el Gmail Remitente sea el mismo que generó la clave 'zunp swmy hyoe fhay'.")
 
 # --- 3. FUNCIONES DE APOYO ---
 def to_excel(df_balance, df_g, df_v):
@@ -221,7 +223,6 @@ elif menu == "📑 Hoja de Vida":
         df_al = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
         msg, alert = "🚨 REPORTE VENCIMIENTOS:\n", False
         for _, r in df_al.iterrows():
-            # CORRECCIÓN PARA EVITAR TYPEERROR
             for doc, f in [("SOAT", r[2]), ("TECNO", r[3]), ("PREV", r[4])]:
                 if f:
                     f_dt = pd.to_datetime(f).date()
@@ -249,9 +250,9 @@ elif menu == "📑 Hoja de Vida":
                 else: cols[i%4].success(f"✅ {n} OK")
             else: cols[i%4].info(f"⚪ {n}: S/D")
 
-# --- USUARIOS ---
+# --- MÓDULO: USUARIOS ---
 elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
-    st.title("⚙️ Usuarios")
+    st.title("⚙️ Gestión de Usuarios")
     with st.form("fu"):
         nom, usr, clv, rol = st.text_input("Nombre"), st.text_input("Usuario"), st.text_input("Clave"), st.selectbox("Rol", ["vendedor", "admin"])
         if st.form_submit_button("👤 Crear"):
