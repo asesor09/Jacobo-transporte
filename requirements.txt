@@ -1,5 +1,6 @@
 streamlit
-pandas
 psycopg2-binary
-xlsxwriter
+pandas
 plotly
+xlsxwriter
+twilio
