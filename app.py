@@ -22,7 +22,7 @@ def conectar_db():
 
 def inicializar_db():
     conn = conectar_db(); cur = conn.cursor()
-    # ORDEN CRÍTICO: Crear primero la tabla de configuración para evitar UndefinedTable
+    # CREACIÓN DE TABLAS - ORDEN CRÍTICO
     cur.execute('''CREATE TABLE IF NOT EXISTS configuracion (
                     id INTEGER PRIMARY KEY DEFAULT 1,
                     email_remitente TEXT, email_clave TEXT, email_destino TEXT,
@@ -56,7 +56,7 @@ def enviar_alertas_sistema(mensaje):
             st.error("⚠️ Configure primero las credenciales en 'Config. Alertas'")
             return
         # Correo
-        msg = MIMEText(mensaje); msg['Subject'] = '⚠️ ALERTA VENCIMIENTOS'; msg['From'] = conf[1]; msg['To'] = conf[3]
+        msg = MIMEText(mensaje); msg['Subject'] = '⚠️ REPORTE VENCIMIENTOS - C&E'; msg['From'] = conf[1]; msg['To'] = conf[3]
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(conf[1], conf[2]); server.sendmail(conf[1], conf[3], msg.as_string())
         # WhatsApp
@@ -64,7 +64,7 @@ def enviar_alertas_sistema(mensaje):
             client = Client(conf[4], conf[5])
             client.messages.create(body=mensaje, from_=conf[6], to=conf[7])
         st.success("✅ Alertas enviadas.")
-    except Exception as e: st.error(f"Error: {e}")
+    except Exception as e: st.error(f"Error en notificación: {e}")
 
 # --- 3. FUNCIONES DE APOYO ---
 def to_excel(df_balance, df_g, df_v):
@@ -83,11 +83,11 @@ inicializar_db()
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if not st.session_state.logged_in:
     st.sidebar.title("🔐 Acceso")
-    u_input = st.sidebar.text_input("Usuario")
-    p_input = st.sidebar.text_input("Contraseña", type="password")
+    u_in = st.sidebar.text_input("Usuario")
+    p_in = st.sidebar.text_input("Contraseña", type="password")
     if st.sidebar.button("Ingresar"):
         conn = conectar_db(); cur = conn.cursor()
-        cur.execute("SELECT nombre, rol FROM usuarios WHERE usuario = %s AND clave = %s", (u_input, p_input))
+        cur.execute("SELECT nombre, rol FROM usuarios WHERE usuario = %s AND clave = %s", (u_in, p_in))
         res = cur.fetchone(); conn.close()
         if res:
             st.session_state.logged_in, st.session_state.u_name, st.session_state.u_rol = True, res[0], res[1]
@@ -108,12 +108,9 @@ v_query = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
 
 # --- MÓDULO: CONFIGURACIÓN ALERTAS ---
 if menu == "🔒 Config. Alertas":
-    st.title("🔒 Configuración de Notificaciones")
-    try:
-        cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1")
-        act = cur.fetchone()
-    except: act = None
-    
+    st.title("🔒 Configuración Protegida")
+    cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1")
+    act = cur.fetchone()
     with st.form("f_conf"):
         c1, c2 = st.columns(2)
         rem = c1.text_input("Gmail Remitente", value=act[1] if act else "")
@@ -121,10 +118,9 @@ if menu == "🔒 Config. Alertas":
         des = c1.text_input("Correo Destino", value=act[3] if act else "")
         sid = c2.text_input("Twilio SID", value=act[4] if act else "")
         tok = c2.text_input("Twilio Token", type="password", value=act[5] if act else "")
-        f_w = c2.text_input("WhatsApp DE", value=act[6] if act else "")
-        t_w = c2.text_input("WhatsApp A", value=act[7] if act else "")
+        f_w = c2.text_input("WhatsApp DE (whatsapp:+...)", value=act[6] if act else "")
+        t_w = c2.text_input("WhatsApp A (whatsapp:+...)", value=act[7] if act else "")
         if st.form_submit_button("💾 Guardar y Ocultar"):
-            cur = conn.cursor()
             cur.execute('''INSERT INTO configuracion (id, email_remitente, email_clave, email_destino, twilio_sid, twilio_token, twilio_whatsapp_de, whatsapp_a)
                            VALUES (1, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET 
                            email_remitente=EXCLUDED.email_remitente, email_clave=EXCLUDED.email_clave, email_destino=EXCLUDED.email_destino,
@@ -132,7 +128,7 @@ if menu == "🔒 Config. Alertas":
                         (rem, cla, des, sid, tok, f_w, t_w))
             conn.commit(); st.success("Guardado."); st.rerun()
 
-# --- MÓDULO: DASHBOARD (RESTAURADO CON CONSOLIDADO) ---
+# --- MÓDULO: DASHBOARD (RESTAURADO) ---
 elif menu == "📊 Dashboard":
     st.title("📊 Análisis de Operación")
     c1, c2 = st.columns(2)
@@ -146,31 +142,36 @@ elif menu == "📊 Dashboard":
             df_g = df_g[df_g['placa'] == placa_f]; df_v = df_v[df_v['placa'] == placa_f]
 
         utilidad = df_v['monto'].sum() - df_g['monto'].sum()
-        st.metric("Utilidad Neta", f"${utilidad:,.0f}", delta=f"{utilidad-target:,.0f}")
+        if utilidad >= target: st.success(f"### 🏆 META ALCANZADA! Utilidad: ${utilidad:,.0f}"); st.balloons()
+        else: st.error(f"### ⚠️ POR DEBAJO. Faltan: ${abs(utilidad-target):,.0f}")
+        
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}"); m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse"); m3.metric("Utilidad", f"${utilidad:,.0f}", delta=f"{utilidad-target:,.0f}")
         
         st.subheader("📊 Consolidado de Gastos por Concepto")
-        df_con = df_g.groupby('concepto')['monto'].sum().reset_index()
+        df_con = df_g.groupby('concepto')['monto'].sum().reset_index().sort_values(by='monto', ascending=False)
+        st.dataframe(df_con.style.format({'monto': '${:,.0f}'}), use_container_width=True, hide_index=True)
         st.plotly_chart(px.pie(df_con, values='monto', names='concepto', hole=0.4), use_container_width=True)
         
         with st.expander("🔍 Ver detalles fila por fila"):
             st.write("**Gastos:**"); st.dataframe(df_g, use_container_width=True, hide_index=True)
             st.write("**Ventas:**"); st.dataframe(df_v, use_container_width=True, hide_index=True)
 
-# --- MÓDULO: GASTOS (CON EDICIÓN Y BORRADO) ---
+# --- MÓDULO: GASTOS (CON EDICIÓN) ---
 elif menu == "💸 Gastos":
     st.title("💸 Gastos")
     tab1, tab2 = st.tabs(["📝 Nuevo", "✏️ Editar/Borrar"])
     with tab1:
         with st.form("fg"):
             v_sel = st.selectbox("Vehículo", v_query['placa'])
-            tipo = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Otros"])
+            tipo = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Viáticos", "Otros"])
             mon, fec, det = st.number_input("Valor"), st.date_input("Fecha"), st.text_input("Nota")
             if st.form_submit_button("💾 Guardar"):
                 v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
                 cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (int(v_id), tipo, mon, fec, det)); conn.commit(); st.rerun()
     with tab2:
-        df_g_ed = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
-        ed_g = st.data_editor(df_g_ed, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
+        df_ge = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
+        ed_g = st.data_editor(df_ge, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
         if st.button("💾 Guardar Cambios"):
             cur = conn.cursor(); ids_vivos = ed_g['id'].tolist()
             cur.execute(f"DELETE FROM gastos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
@@ -179,7 +180,7 @@ elif menu == "💸 Gastos":
                 cur.execute("UPDATE gastos SET vehiculo_id=%s, tipo_gasto=%s, monto=%s, fecha=%s, detalle=%s WHERE id=%s", (int(v_id_n), r['tipo_gasto'], r['monto'], r['fecha'], r['detalle'], int(r['id'])))
             conn.commit(); st.rerun()
 
-# --- MÓDULO: HOJA DE VIDA (RESTAURADO COMPLETO) ---
+# --- MÓDULO: HOJA DE VIDA (COMPLETO) ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
     if st.button("🔔 Enviar Reporte Ahora"):
@@ -192,6 +193,16 @@ elif menu == "📑 Hoja de Vida":
                     msg += f"- {r[0]}: {doc} vence {f}\n"; alertas = True
         if alertas: enviar_alertas_sistema(msg)
         else: st.info("Todo al día.")
+
+    with st.expander("📅 Actualizar"):
+        with st.form("fhv"):
+            v_sel = st.selectbox("Vehículo", v_query['placa'])
+            v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
+            c1, c2 = st.columns(2)
+            s_v, t_v, p_v = c1.date_input("SOAT"), c1.date_input("Tecno"), c1.date_input("Preventivo")
+            pc_v, pe_v, ptr_v, to_v = c2.date_input("Contractual"), c2.date_input("Extra"), c2.date_input("Todo Riesgo"), st.date_input("Tarjeta Operaciones")
+            if st.form_submit_button("🔄 Guardar"):
+                cur = conn.cursor(); cur.execute("INSERT INTO hoja_vida (vehiculo_id, soat_vence, tecno_vence, prev_vence, p_contractual, p_extracontractual, p_todoriesgo, t_operaciones) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (vehiculo_id) DO UPDATE SET soat_vence=EXCLUDED.soat_vence, tecno_vence=EXCLUDED.tecno_vence, prev_vence=EXCLUDED.prev_vence, p_contractual=EXCLUDED.p_contractual, p_extracontractual=EXCLUDED.p_extracontractual, p_todoriesgo=EXCLUDED.p_todoriesgo, t_operaciones=EXCLUDED.t_operaciones", (int(v_id), s_v, t_v, p_v, pc_v, pe_v, ptr_v, to_v)); conn.commit(); st.rerun()
 
     df_hv = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v LEFT JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
     hoy = datetime.now().date()
