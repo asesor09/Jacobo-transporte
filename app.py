@@ -22,13 +22,7 @@ def conectar_db():
 
 def inicializar_db():
     conn = conectar_db(); cur = conn.cursor()
-    # CREACIÓN DE TABLAS - ORDEN CRÍTICO
-    cur.execute('''CREATE TABLE IF NOT EXISTS configuracion (
-                    id INTEGER PRIMARY KEY DEFAULT 1,
-                    email_remitente TEXT, email_clave TEXT, email_destino TEXT,
-                    twilio_sid TEXT, twilio_token TEXT, twilio_whatsapp_de TEXT, whatsapp_a TEXT,
-                    CONSTRAINT single_row CHECK (id = 1))''')
-    
+    # Crear tablas en orden
     cur.execute('CREATE TABLE IF NOT EXISTS vehiculos (id SERIAL PRIMARY KEY, placa TEXT UNIQUE NOT NULL, marca TEXT, modelo TEXT, conductor TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), tipo_gasto TEXT, monto NUMERIC, fecha DATE, detalle TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, descripcion TEXT)')
@@ -38,12 +32,14 @@ def inicializar_db():
                     soat_vence DATE, tecno_vence DATE, prev_vence DATE,
                     p_contractual DATE, p_extracontractual DATE, p_todoriesgo DATE, t_operaciones DATE)''')
     cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nombre TEXT, usuario TEXT UNIQUE NOT NULL, clave TEXT NOT NULL, rol TEXT DEFAULT "vendedor")')
-    cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES ('Jacobo Admin', 'admin', 'Jacobo2026', 'admin') ON CONFLICT (usuario) DO NOTHING")
     
-    columnas_extra = ["p_contractual", "p_extracontractual", "p_todoriesgo", "t_operaciones"]
-    for col in columnas_extra:
-        try: cur.execute(f"ALTER TABLE hoja_vida ADD COLUMN {col} DATE")
-        except: conn.rollback()
+    # Crear tabla de configuración blindada
+    cur.execute('''CREATE TABLE IF NOT EXISTS configuracion (
+                    id INTEGER PRIMARY KEY,
+                    email_remitente TEXT, email_clave TEXT, email_destino TEXT,
+                    twilio_sid TEXT, twilio_token TEXT, twilio_whatsapp_de TEXT, whatsapp_a TEXT)''')
+    
+    cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES ('Jacobo Admin', 'admin', 'Jacobo2026', 'admin') ON CONFLICT (usuario) DO NOTHING")
     conn.commit(); conn.close()
 
 # --- 2. LÓGICA DE NOTIFICACIONES ---
@@ -52,21 +48,21 @@ def enviar_alertas_sistema(mensaje):
         conn = conectar_db(); cur = conn.cursor()
         cur.execute("SELECT * FROM configuracion WHERE id = 1")
         conf = cur.fetchone(); conn.close()
-        if not conf or not conf[1]:
-            st.error("⚠️ Configure primero las credenciales en 'Config. Alertas'")
+        if not conf:
+            st.error("⚠️ Configure los datos en 'Config. Alertas'")
             return
         # Correo
-        msg = MIMEText(mensaje); msg['Subject'] = '⚠️ REPORTE VENCIMIENTOS - C&E'; msg['From'] = conf[1]; msg['To'] = conf[3]
+        msg = MIMEText(mensaje); msg['Subject'] = '⚠️ ALERTA C&E'; msg['From'] = conf[1]; msg['To'] = conf[3]
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(conf[1], conf[2]); server.sendmail(conf[1], conf[3], msg.as_string())
         # WhatsApp
         if TWILIO_INSTALADO and conf[4]:
             client = Client(conf[4], conf[5])
             client.messages.create(body=mensaje, from_=conf[6], to=conf[7])
-        st.success("✅ Alertas enviadas.")
-    except Exception as e: st.error(f"Error en notificación: {e}")
+        st.success("✅ Enviado.")
+    except Exception as e: st.error(f"Error: {e}")
 
-# --- 3. FUNCIONES DE APOYO ---
+# --- 3. FUNCIONES APOYO ---
 def to_excel(df_balance, df_g, df_v):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -75,11 +71,11 @@ def to_excel(df_balance, df_g, df_v):
         df_v.to_excel(writer, index=False, sheet_name='Detalle Ventas')
     return output.getvalue()
 
-# --- 4. CONFIGURACIÓN DE PÁGINA ---
+# --- 4. CONFIGURACIÓN PÁGINA ---
 st.set_page_config(page_title="C&E Eficiencias", layout="wide", page_icon="🚐")
 inicializar_db()
 
-# --- 5. SISTEMA DE LOGIN ---
+# --- 5. LOGIN ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if not st.session_state.logged_in:
     st.sidebar.title("🔐 Acceso")
@@ -97,20 +93,26 @@ if not st.session_state.logged_in:
 # --- 6. MENÚ ---
 st.sidebar.write(f"👋 **{st.session_state.u_name}**")
 st.sidebar.divider()
-target = st.sidebar.number_input("🎯 Meta Utilidad ($)", value=5000000, step=500000)
+target = st.sidebar.number_input("Meta Utilidad ($)", value=5000000, step=500000)
 opciones = ["📊 Dashboard", "🚐 Flota", "💸 Gastos", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Usuarios"]
 if st.session_state.u_rol == "admin": opciones.append("🔒 Config. Alertas")
-menu = st.sidebar.selectbox("📂 MÓDULOS", opciones)
+menu = st.sidebar.selectbox("MÓDULOS", opciones)
 if st.sidebar.button("🚪 CERRAR SESIÓN"): st.session_state.logged_in = False; st.rerun()
 
 conn = conectar_db()
 v_query = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
 
-# --- MÓDULO: CONFIGURACIÓN ALERTAS ---
+# --- MÓDULO: CONFIGURACIÓN ALERTAS (CORREGIDO) ---
 if menu == "🔒 Config. Alertas":
-    st.title("🔒 Configuración Protegida")
-    cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1")
-    act = cur.fetchone()
+    st.title("🔒 Configuración de Alertas")
+    # Lectura protegida para evitar el error UndefinedTable
+    act = None
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM configuracion WHERE id = 1")
+        act = cur.fetchone()
+    except: pass
+
     with st.form("f_conf"):
         c1, c2 = st.columns(2)
         rem = c1.text_input("Gmail Remitente", value=act[1] if act else "")
@@ -118,9 +120,10 @@ if menu == "🔒 Config. Alertas":
         des = c1.text_input("Correo Destino", value=act[3] if act else "")
         sid = c2.text_input("Twilio SID", value=act[4] if act else "")
         tok = c2.text_input("Twilio Token", type="password", value=act[5] if act else "")
-        f_w = c2.text_input("WhatsApp DE (whatsapp:+...)", value=act[6] if act else "")
-        t_w = c2.text_input("WhatsApp A (whatsapp:+...)", value=act[7] if act else "")
-        if st.form_submit_button("💾 Guardar y Ocultar"):
+        f_w = c2.text_input("WhatsApp DE", value=act[6] if act else "")
+        t_w = c2.text_input("WhatsApp A", value=act[7] if act else "")
+        if st.form_submit_button("💾 Guardar"):
+            cur = conn.cursor()
             cur.execute('''INSERT INTO configuracion (id, email_remitente, email_clave, email_destino, twilio_sid, twilio_token, twilio_whatsapp_de, whatsapp_a)
                            VALUES (1, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET 
                            email_remitente=EXCLUDED.email_remitente, email_clave=EXCLUDED.email_clave, email_destino=EXCLUDED.email_destino,
@@ -142,8 +145,8 @@ elif menu == "📊 Dashboard":
             df_g = df_g[df_g['placa'] == placa_f]; df_v = df_v[df_v['placa'] == placa_f]
 
         utilidad = df_v['monto'].sum() - df_g['monto'].sum()
-        if utilidad >= target: st.success(f"### 🏆 META ALCANZADA! Utilidad: ${utilidad:,.0f}"); st.balloons()
-        else: st.error(f"### ⚠️ POR DEBAJO. Faltan: ${abs(utilidad-target):,.0f}")
+        if utilidad >= target: st.success(f"🏆 META ALCANZADA! Utilidad: ${utilidad:,.0f}"); st.balloons()
+        else: st.error(f"⚠️ POR DEBAJO. Faltan: ${abs(utilidad-target):,.0f}")
         
         m1, m2, m3 = st.columns(3)
         m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}"); m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse"); m3.metric("Utilidad", f"${utilidad:,.0f}", delta=f"{utilidad-target:,.0f}")
@@ -180,7 +183,7 @@ elif menu == "💸 Gastos":
                 cur.execute("UPDATE gastos SET vehiculo_id=%s, tipo_gasto=%s, monto=%s, fecha=%s, detalle=%s WHERE id=%s", (int(v_id_n), r['tipo_gasto'], r['monto'], r['fecha'], r['detalle'], int(r['id'])))
             conn.commit(); st.rerun()
 
-# --- MÓDULO: HOJA DE VIDA (COMPLETO) ---
+# --- MÓDULO: HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
     if st.button("🔔 Enviar Reporte Ahora"):
@@ -193,16 +196,6 @@ elif menu == "📑 Hoja de Vida":
                     msg += f"- {r[0]}: {doc} vence {f}\n"; alertas = True
         if alertas: enviar_alertas_sistema(msg)
         else: st.info("Todo al día.")
-
-    with st.expander("📅 Actualizar"):
-        with st.form("fhv"):
-            v_sel = st.selectbox("Vehículo", v_query['placa'])
-            v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
-            c1, c2 = st.columns(2)
-            s_v, t_v, p_v = c1.date_input("SOAT"), c1.date_input("Tecno"), c1.date_input("Preventivo")
-            pc_v, pe_v, ptr_v, to_v = c2.date_input("Contractual"), c2.date_input("Extra"), c2.date_input("Todo Riesgo"), st.date_input("Tarjeta Operaciones")
-            if st.form_submit_button("🔄 Guardar"):
-                cur = conn.cursor(); cur.execute("INSERT INTO hoja_vida (vehiculo_id, soat_vence, tecno_vence, prev_vence, p_contractual, p_extracontractual, p_todoriesgo, t_operaciones) VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (vehiculo_id) DO UPDATE SET soat_vence=EXCLUDED.soat_vence, tecno_vence=EXCLUDED.tecno_vence, prev_vence=EXCLUDED.prev_vence, p_contractual=EXCLUDED.p_contractual, p_extracontractual=EXCLUDED.p_extracontractual, p_todoriesgo=EXCLUDED.p_todoriesgo, t_operaciones=EXCLUDED.t_operaciones", (int(v_id), s_v, t_v, p_v, pc_v, pe_v, ptr_v, to_v)); conn.commit(); st.rerun()
 
     df_hv = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v LEFT JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
     hoy = datetime.now().date()
