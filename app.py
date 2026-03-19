@@ -95,7 +95,7 @@ if st.sidebar.button("🚪 CERRAR SESIÓN"): st.session_state.logged_in = False;
 conn = conectar_db()
 v_query = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
 
-# --- CONFIGURACIÓN ALERTAS ---
+# --- MÓDULO: CONFIGURACIÓN ALERTAS ---
 if menu == "🔒 Config. Alertas":
     st.title("🔒 Configuración de Notificaciones")
     cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1"); act = cur.fetchone()
@@ -116,54 +116,50 @@ if menu == "🔒 Config. Alertas":
                         (rem, cla, des, sid, tok, f_w, t_w))
             conn.commit(); st.success("Configuración guardada."); st.rerun()
 
-# --- DASHBOARD ---
+# --- MÓDULO: DASHBOARD ---
 elif menu == "📊 Dashboard":
     st.title("📊 Análisis de Operación")
     c1, c2 = st.columns(2)
     with c1: placa_f = st.selectbox("Vehículo:", ["TODOS"] + v_query['placa'].tolist())
-    with c2: rango = st.date_input("Rango de Fechas:", [datetime.now().date() - timedelta(days=30), datetime.now().date()])
-
+    with c2: rango = st.date_input("Rango:", [datetime.now().date() - timedelta(days=30), datetime.now().date()])
     if len(rango) == 2:
         df_g = pd.read_sql("SELECT g.fecha, v.placa, g.tipo_gasto as concepto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s", conn, params=[rango[0], rango[1]])
         df_v = pd.read_sql("SELECT s.fecha, v.placa, s.cliente, s.valor_viaje as monto, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s", conn, params=[rango[0], rango[1]])
         if placa_f != "TODOS":
             df_g = df_g[df_g['placa'] == placa_f]; df_v = df_v[df_v['placa'] == placa_f]
-
         utilidad = df_v['monto'].sum() - df_g['monto'].sum()
         dif = utilidad - target
-        if utilidad >= target: st.success(f"🏆 ¡META ALCANZADA! Utilidad: ${utilidad:,.0f}"); st.balloons()
-        else: st.error(f"### ⚠️ POR DEBAJO DE LA META \n Faltan: **${abs(dif):,.0f}**")
-
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}")
-        m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse")
-        m3.metric("Utilidad", f"${utilidad:,.0f}", delta=f"{dif:,.0f}")
-        
+        if utilidad >= target: st.success(f"### 🏆 META ALCANZADA! Utilidad: ${utilidad:,.0f}"); st.balloons()
+        else: st.error(f"### ⚠️ POR DEBAJO. Faltan: ${abs(dif):,.0f}")
+        m1, m2, m3 = st.columns(3); m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}"); m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse"); m3.metric("Utilidad", f"${utilidad:,.0f}", delta=f"{dif:,.0f}")
         st.subheader("📊 Consolidado de Gastos por Concepto")
         df_con = df_g.groupby('concepto')['monto'].sum().reset_index().sort_values(by='monto', ascending=False)
         st.dataframe(df_con.style.format({'monto': '${:,.0f}'}), use_container_width=True, hide_index=True)
         st.plotly_chart(px.pie(df_con, values='monto', names='concepto', hole=0.4), use_container_width=True)
-
         res_g = df_g.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Gasto'})
         res_v = df_v.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Venta'})
         balance_df = pd.merge(res_v, res_g, on='placa', how='outer').fillna(0)
         st.download_button("📥 Descargar Reporte Excel", data=to_excel(balance_df, df_g, df_v), file_name="Reporte_CE.xlsx")
-
-        with st.expander("🔍 Ver detalles fila por fila"):
+        with st.expander("🔍 Ver detalles"):
             st.write("**Gastos:**"); st.dataframe(df_g, use_container_width=True, hide_index=True)
             st.write("**Ventas:**"); st.dataframe(df_v, use_container_width=True, hide_index=True)
 
-# --- FLOTA ---
+# --- MÓDULO: FLOTA ---
 elif menu == "🚐 Flota":
     st.title("🚐 Administración de Vehículos")
     with st.form("f_flota"):
         p, m, mod, cond = st.text_input("Placa").upper(), st.text_input("Marca"), st.text_input("Modelo"), st.text_input("Conductor")
         if st.form_submit_button("➕ Añadir"):
             cur = conn.cursor(); cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, cond)); conn.commit(); st.rerun()
-    df_f = pd.read_sql("SELECT placa, marca, modelo, conductor FROM vehiculos", conn)
-    st.dataframe(df_f, use_container_width=True, hide_index=True)
+    df_f = pd.read_sql("SELECT id, placa, marca, modelo, conductor FROM vehiculos", conn)
+    ed_f = st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True, num_rows="dynamic")
+    if st.button("💾 Guardar Cambios Flota"):
+        cur = conn.cursor(); ids_vivos = ed_f['id'].tolist()
+        cur.execute(f"DELETE FROM vehiculos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
+        for _, r in ed_f.iterrows(): cur.execute("UPDATE vehiculos SET placa=%s, marca=%s, modelo=%s, conductor=%s WHERE id=%s", (r['placa'], r['marca'], r['modelo'], r['conductor'], int(r['id'])))
+        conn.commit(); st.rerun()
 
-# --- GASTOS ---
+# --- MÓDULO: GASTOS ---
 elif menu == "💸 Gastos":
     st.title("💸 Registro de Gastos")
     tab1, tab2 = st.tabs(["📝 Nuevo", "✏️ Editar/Borrar"])
@@ -186,10 +182,10 @@ elif menu == "💸 Gastos":
                 cur.execute("UPDATE gastos SET vehiculo_id=%s, tipo_gasto=%s, monto=%s, fecha=%s, detalle=%s WHERE id=%s", (int(v_id_n), r['tipo_gasto'], r['monto'], r['fecha'], r['detalle'], int(r['id'])))
             conn.commit(); st.rerun()
 
-# --- VENTAS ---
+# --- MÓDULO: VENTAS ---
 elif menu == "💰 Ventas":
     st.title("💰 Control de Ingresos")
-    tab1, tab2 = st.tabs(["💰 Nueva Venta", "✏️ Editar/Borrar"])
+    tab1, tab2 = st.tabs(["💰 Nuevo", "✏️ Editar/Borrar"])
     with tab1:
         with st.form("fv"):
             v_sel = st.selectbox("Vehículo", v_query['placa'])
@@ -208,15 +204,20 @@ elif menu == "💰 Ventas":
                 cur.execute("UPDATE ventas SET vehiculo_id=%s, cliente=%s, valor_viaje=%s, fecha=%s, descripcion=%s WHERE id=%s", (int(v_id_n), r['cliente'], r['valor_viaje'], r['fecha'], r['descripcion'], int(r['id'])))
             conn.commit(); st.rerun()
 
-# --- HOJA DE VIDA ---
+# --- MÓDULO: HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
     if st.button("🔔 Enviar Reporte Ahora"):
-        hoy = datetime.now().date(); df_al = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
-        msg, alert = "🚨 REPORTE:\n", False
+        hoy = datetime.now().date()
+        df_al = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
+        msg, alert = "🚨 REPORTE VENCIMIENTOS:\n", False
         for _, r in df_al.iterrows():
+            # CORRECCIÓN DE ERROR DE TIPO: Convertir r[2], r[3], r[4] a fecha segura
             for doc, f in [("SOAT", r[2]), ("TECNO", r[3]), ("PREV", r[4])]:
-                if f and (f - hoy).days <= 15: msg += f"- {r[0]}: {doc} vence {f}\n"; alert = True
+                if f:
+                    fecha_f = pd.to_datetime(f).date()
+                    if (fecha_f - hoy).days <= 15:
+                        msg += f"- {r[0]}: {doc} vence {fecha_f}\n"; alert = True
         if alert: enviar_alertas_sistema(msg)
         else: st.info("Todo al día.")
     with st.expander("📅 Actualizar Fechas"):
@@ -232,13 +233,14 @@ elif menu == "📑 Hoja de Vida":
         docs = [("SOAT", r['soat_vence']), ("TECNO", r['tecno_vence']), ("PREV", r['prev_vence']), ("T.OPER", r['t_operaciones']), ("POL. CONT", r['p_contractual']), ("POL. EXTRA", r['p_extracontractual']), ("TODO RIESGO", r['p_todoriesgo'])]
         for i, (n, f) in enumerate(docs):
             if f:
-                d = (f - hoy).days
+                fecha_f = pd.to_datetime(f).date()
+                d = (fecha_f - hoy).days
                 if d < 0: cols[i%4].error(f"❌ {n} VENCIDO")
                 elif d <= 15: cols[i%4].warning(f"⚠️ {n} ({d} d)")
                 else: cols[i%4].success(f"✅ {n} OK")
             else: cols[i%4].info(f"⚪ {n}: S/D")
 
-# --- USUARIOS ---
+# --- MÓDULO: USUARIOS ---
 elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
     st.title("⚙️ Gestión de Usuarios")
     with st.form("fu"):
