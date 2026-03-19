@@ -22,7 +22,12 @@ def conectar_db():
 
 def inicializar_db():
     conn = conectar_db(); cur = conn.cursor()
-    # Crear tablas en orden
+    # Creación de tablas en orden
+    cur.execute('''CREATE TABLE IF NOT EXISTS configuracion (
+                    id INTEGER PRIMARY KEY DEFAULT 1,
+                    email_remitente TEXT, email_clave TEXT, email_destino TEXT,
+                    twilio_sid TEXT, twilio_token TEXT, twilio_whatsapp_de TEXT, whatsapp_a TEXT,
+                    CONSTRAINT single_row CHECK (id = 1))''')
     cur.execute('CREATE TABLE IF NOT EXISTS vehiculos (id SERIAL PRIMARY KEY, placa TEXT UNIQUE NOT NULL, marca TEXT, modelo TEXT, conductor TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS gastos (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), tipo_gasto TEXT, monto NUMERIC, fecha DATE, detalle TEXT)')
     cur.execute('CREATE TABLE IF NOT EXISTS ventas (id SERIAL PRIMARY KEY, vehiculo_id INTEGER REFERENCES vehiculos(id), cliente TEXT, valor_viaje NUMERIC, fecha DATE, descripcion TEXT)')
@@ -32,13 +37,6 @@ def inicializar_db():
                     soat_vence DATE, tecno_vence DATE, prev_vence DATE,
                     p_contractual DATE, p_extracontractual DATE, p_todoriesgo DATE, t_operaciones DATE)''')
     cur.execute('CREATE TABLE IF NOT EXISTS usuarios (id SERIAL PRIMARY KEY, nombre TEXT, usuario TEXT UNIQUE NOT NULL, clave TEXT NOT NULL, rol TEXT DEFAULT "vendedor")')
-    
-    # Crear tabla de configuración blindada
-    cur.execute('''CREATE TABLE IF NOT EXISTS configuracion (
-                    id INTEGER PRIMARY KEY,
-                    email_remitente TEXT, email_clave TEXT, email_destino TEXT,
-                    twilio_sid TEXT, twilio_token TEXT, twilio_whatsapp_de TEXT, whatsapp_a TEXT)''')
-    
     cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES ('Jacobo Admin', 'admin', 'Jacobo2026', 'admin') ON CONFLICT (usuario) DO NOTHING")
     conn.commit(); conn.close()
 
@@ -51,31 +49,20 @@ def enviar_alertas_sistema(mensaje):
         if not conf:
             st.error("⚠️ Configure los datos en 'Config. Alertas'")
             return
-        # Correo
         msg = MIMEText(mensaje); msg['Subject'] = '⚠️ ALERTA C&E'; msg['From'] = conf[1]; msg['To'] = conf[3]
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
             server.login(conf[1], conf[2]); server.sendmail(conf[1], conf[3], msg.as_string())
-        # WhatsApp
         if TWILIO_INSTALADO and conf[4]:
             client = Client(conf[4], conf[5])
             client.messages.create(body=mensaje, from_=conf[6], to=conf[7])
-        st.success("✅ Enviado.")
+        st.success("✅ Alertas enviadas.")
     except Exception as e: st.error(f"Error: {e}")
 
-# --- 3. FUNCIONES APOYO ---
-def to_excel(df_balance, df_g, df_v):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_balance.to_excel(writer, index=False, sheet_name='Balance General')
-        df_g.to_excel(writer, index=False, sheet_name='Detalle Gastos')
-        df_v.to_excel(writer, index=False, sheet_name='Detalle Ventas')
-    return output.getvalue()
-
-# --- 4. CONFIGURACIÓN PÁGINA ---
+# --- 3. CONFIGURACIÓN PÁGINA ---
 st.set_page_config(page_title="C&E Eficiencias", layout="wide", page_icon="🚐")
 inicializar_db()
 
-# --- 5. LOGIN ---
+# --- 4. LOGIN ---
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if not st.session_state.logged_in:
     st.sidebar.title("🔐 Acceso")
@@ -90,7 +77,7 @@ if not st.session_state.logged_in:
             st.rerun()
     st.stop()
 
-# --- 6. MENÚ ---
+# --- 5. MENÚ ---
 st.sidebar.write(f"👋 **{st.session_state.u_name}**")
 st.sidebar.divider()
 target = st.sidebar.number_input("Meta Utilidad ($)", value=5000000, step=500000)
@@ -102,17 +89,13 @@ if st.sidebar.button("🚪 CERRAR SESIÓN"): st.session_state.logged_in = False;
 conn = conectar_db()
 v_query = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
 
-# --- MÓDULO: CONFIGURACIÓN ALERTAS (CORREGIDO) ---
+# --- CONFIGURACIÓN ALERTAS ---
 if menu == "🔒 Config. Alertas":
     st.title("🔒 Configuración de Alertas")
-    # Lectura protegida para evitar el error UndefinedTable
     act = None
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT * FROM configuracion WHERE id = 1")
-        act = cur.fetchone()
+        cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1"); act = cur.fetchone()
     except: pass
-
     with st.form("f_conf"):
         c1, c2 = st.columns(2)
         rem = c1.text_input("Gmail Remitente", value=act[1] if act else "")
@@ -131,36 +114,43 @@ if menu == "🔒 Config. Alertas":
                         (rem, cla, des, sid, tok, f_w, t_w))
             conn.commit(); st.success("Guardado."); st.rerun()
 
-# --- MÓDULO: DASHBOARD (RESTAURADO) ---
+# --- DASHBOARD ---
 elif menu == "📊 Dashboard":
     st.title("📊 Análisis de Operación")
-    c1, c2 = st.columns(2)
-    with c1: placa_f = st.selectbox("Vehículo:", ["TODOS"] + v_query['placa'].tolist())
-    with c2: rango = st.date_input("Rango:", [datetime.now().date() - timedelta(days=30), datetime.now().date()])
-
+    rango = st.date_input("Rango:", [datetime.now().date() - timedelta(days=30), datetime.now().date()])
     if len(rango) == 2:
         df_g = pd.read_sql("SELECT g.fecha, v.placa, g.tipo_gasto as concepto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s", conn, params=[rango[0], rango[1]])
         df_v = pd.read_sql("SELECT s.fecha, v.placa, s.cliente, s.valor_viaje as monto, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s", conn, params=[rango[0], rango[1]])
-        if placa_f != "TODOS":
-            df_g = df_g[df_g['placa'] == placa_f]; df_v = df_v[df_v['placa'] == placa_f]
-
-        utilidad = df_v['monto'].sum() - df_g['monto'].sum()
-        if utilidad >= target: st.success(f"🏆 META ALCANZADA! Utilidad: ${utilidad:,.0f}"); st.balloons()
-        else: st.error(f"⚠️ POR DEBAJO. Faltan: ${abs(utilidad-target):,.0f}")
         
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}"); m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse"); m3.metric("Utilidad", f"${utilidad:,.0f}", delta=f"{utilidad-target:,.0f}")
+        utilidad = df_v['monto'].sum() - df_g['monto'].sum()
+        st.metric("Utilidad Neta", f"${utilidad:,.0f}", delta=f"{utilidad-target:,.0f}")
         
         st.subheader("📊 Consolidado de Gastos por Concepto")
-        df_con = df_g.groupby('concepto')['monto'].sum().reset_index().sort_values(by='monto', ascending=False)
+        df_con = df_g.groupby('concepto')['monto'].sum().reset_index()
         st.dataframe(df_con.style.format({'monto': '${:,.0f}'}), use_container_width=True, hide_index=True)
         st.plotly_chart(px.pie(df_con, values='monto', names='concepto', hole=0.4), use_container_width=True)
         
-        with st.expander("🔍 Ver detalles fila por fila"):
+        with st.expander("🔍 Detalles fila por fila"):
             st.write("**Gastos:**"); st.dataframe(df_g, use_container_width=True, hide_index=True)
             st.write("**Ventas:**"); st.dataframe(df_v, use_container_width=True, hide_index=True)
 
-# --- MÓDULO: GASTOS (CON EDICIÓN) ---
+# --- FLOTA (RESTAURADO) ---
+elif menu == "🚐 Flota":
+    st.title("🚐 Administración de Vehículos")
+    with st.form("f_flota"):
+        p, m, mod, cond = st.text_input("Placa").upper(), st.text_input("Marca"), st.text_input("Modelo"), st.text_input("Conductor")
+        if st.form_submit_button("➕ Añadir Carro"):
+            cur = conn.cursor(); cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, cond)); conn.commit(); st.rerun()
+    df_f = pd.read_sql("SELECT id, placa, marca, modelo, conductor FROM vehiculos", conn)
+    ed_f = st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True, num_rows="dynamic")
+    if st.button("💾 Guardar Flota"):
+        cur = conn.cursor(); ids_vivos = ed_f['id'].tolist()
+        cur.execute(f"DELETE FROM vehiculos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
+        for _, r in ed_f.iterrows():
+            cur.execute("UPDATE vehiculos SET placa=%s, marca=%s, modelo=%s, conductor=%s WHERE id=%s", (r['placa'], r['marca'], r['modelo'], r['conductor'], int(r['id'])))
+        conn.commit(); st.rerun()
+
+# --- GASTOS ---
 elif menu == "💸 Gastos":
     st.title("💸 Gastos")
     tab1, tab2 = st.tabs(["📝 Nuevo", "✏️ Editar/Borrar"])
@@ -175,7 +165,7 @@ elif menu == "💸 Gastos":
     with tab2:
         df_ge = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
         ed_g = st.data_editor(df_ge, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
-        if st.button("💾 Guardar Cambios"):
+        if st.button("💾 Guardar Cambios Gastos"):
             cur = conn.cursor(); ids_vivos = ed_g['id'].tolist()
             cur.execute(f"DELETE FROM gastos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
             for _, r in ed_g.iterrows():
@@ -183,20 +173,38 @@ elif menu == "💸 Gastos":
                 cur.execute("UPDATE gastos SET vehiculo_id=%s, tipo_gasto=%s, monto=%s, fecha=%s, detalle=%s WHERE id=%s", (int(v_id_n), r['tipo_gasto'], r['monto'], r['fecha'], r['detalle'], int(r['id'])))
             conn.commit(); st.rerun()
 
-# --- MÓDULO: HOJA DE VIDA ---
+# --- VENTAS (RESTAURADO) ---
+elif menu == "💰 Ventas":
+    st.title("💰 Ingresos por Ventas")
+    tab1, tab2 = st.tabs(["💰 Nuevo", "✏️ Editar/Borrar"])
+    with tab1:
+        with st.form("fv"):
+            v_sel = st.selectbox("Vehículo", v_query['placa'])
+            cli, val, fec, dsc = st.text_input("Cliente"), st.number_input("Valor Viaje"), st.date_input("Fecha"), st.text_input("Nota")
+            if st.form_submit_button("💰 Registrar"):
+                v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
+                cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion) VALUES (%s,%s,%s,%s,%s)", (int(v_id), cli, val, fec, dsc)); conn.commit(); st.rerun()
+    df_ve = pd.read_sql("SELECT s.id, s.fecha, v.placa, s.cliente, s.valor_viaje, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.fecha DESC", conn)
+    ed_v = st.data_editor(df_ve, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
+    if st.button("💾 Guardar Cambios Ventas"):
+        cur = conn.cursor(); ids_vivos = ed_v['id'].tolist()
+        cur.execute(f"DELETE FROM ventas WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
+        for _, r in ed_v.iterrows():
+            v_id_n = v_query[v_query['placa'] == r['placa']]['id'].values[0]
+            cur.execute("UPDATE ventas SET vehiculo_id=%s, cliente=%s, valor_viaje=%s, fecha=%s, descripcion=%s WHERE id=%s", (int(v_id_n), r['cliente'], r['valor_viaje'], r['fecha'], r['descripcion'], int(r['id'])))
+        conn.commit(); st.rerun()
+
+# --- HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
-    if st.button("🔔 Enviar Reporte Ahora"):
-        hoy = datetime.now().date()
-        df_al = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
-        msg, alertas = "🚨 REPORTE:\n", False
+    if st.button("🔔 Enviar Reporte"):
+        hoy = datetime.now().date(); df_al = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
+        msg, alert = "🚨 REPORTE:\n", False
         for _, r in df_al.iterrows():
             for doc, f in [("SOAT", r[2]), ("TECNO", r[3]), ("PREV", r[4])]:
-                if f and (f - hoy).days <= 15:
-                    msg += f"- {r[0]}: {doc} vence {f}\n"; alertas = True
-        if alertas: enviar_alertas_sistema(msg)
+                if f and (f - hoy).days <= 15: msg += f"- {r[0]}: {doc} vence {f}\n"; alert = True
+        if alert: enviar_alertas_sistema(msg)
         else: st.info("Todo al día.")
-
     df_hv = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v LEFT JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
     hoy = datetime.now().date()
     for _, r in df_hv.iterrows():
