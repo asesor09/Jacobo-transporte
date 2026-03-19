@@ -45,18 +45,27 @@ def enviar_alertas_sistema(mensaje):
         cur.execute("SELECT * FROM configuracion WHERE id = 1")
         conf = cur.fetchone(); conn.close()
         if not conf or not conf[1]:
-            st.error("⚠️ Configura los datos en 'Config. Alertas'")
+            st.error("⚠️ Datos de remitente incompletos en 'Config. Alertas'")
             return
-        msg = MIMEText(mensaje); msg['Subject'] = '⚠️ ALERTA C&E'; msg['From'] = conf[1]; msg['To'] = conf[3]
+        
+        # Proceso de envío de Correo
+        msg = MIMEText(mensaje); msg['Subject'] = '⚠️ ALERTA VENCIMIENTOS - C&E'; msg['From'] = conf[1]; msg['To'] = conf[3]
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(conf[1], conf[2]); server.sendmail(conf[1], conf[3], msg.as_string())
+            # Quitamos espacios por si acaso se pegaron con espacios
+            clave_limpia = conf[2].replace(" ", "")
+            server.login(conf[1], clave_limpia)
+            server.sendmail(conf[1], conf[3], msg.as_string())
+        
+        # Proceso de envío WhatsApp
         if TWILIO_INSTALADO and conf[4] and conf[4] != "":
             client = Client(conf[4], conf[5])
             client.messages.create(body=mensaje, from_=conf[6], to=conf[7])
-        st.success("✅ Reporte enviado.")
-    except Exception as e: st.error(f"Error: {e}")
+        st.success("✅ Reporte enviado con éxito.")
+    except Exception as e: 
+        st.error(f"❌ Error de Autenticación: {e}")
+        st.info("Revisa que el correo remitente y la clave de 16 letras sean correctos en el módulo de Configuración.")
 
-# --- 3. GENERAR EXCEL ---
+# --- 3. FUNCIONES DE APOYO ---
 def to_excel(df_balance, df_g, df_v):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -97,7 +106,7 @@ v_query = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
 
 # --- MÓDULO: CONFIGURACIÓN ALERTAS ---
 if menu == "🔒 Config. Alertas":
-    st.title("🔒 Configuración de Notificaciones")
+    st.title("🔒 Configuración Protegida")
     cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1"); act = cur.fetchone()
     with st.form("f_conf"):
         c1, c2 = st.columns(2)
@@ -116,12 +125,12 @@ if menu == "🔒 Config. Alertas":
                         (rem, cla, des, sid, tok, f_w, t_w))
             conn.commit(); st.success("Configuración guardada."); st.rerun()
 
-# --- MÓDULO: DASHBOARD ---
+# --- DASHBOARD ---
 elif menu == "📊 Dashboard":
     st.title("📊 Análisis de Operación")
     c1, c2 = st.columns(2)
     with c1: placa_f = st.selectbox("Vehículo:", ["TODOS"] + v_query['placa'].tolist())
-    with c2: rango = st.date_input("Rango:", [datetime.now().date() - timedelta(days=30), datetime.now().date()])
+    with c2: rango = st.date_input("Rango de Fechas:", [datetime.now().date() - timedelta(days=30), datetime.now().date()])
     if len(rango) == 2:
         df_g = pd.read_sql("SELECT g.fecha, v.placa, g.tipo_gasto as concepto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s", conn, params=[rango[0], rango[1]])
         df_v = pd.read_sql("SELECT s.fecha, v.placa, s.cliente, s.valor_viaje as monto, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s", conn, params=[rango[0], rango[1]])
@@ -144,24 +153,24 @@ elif menu == "📊 Dashboard":
             st.write("**Gastos:**"); st.dataframe(df_g, use_container_width=True, hide_index=True)
             st.write("**Ventas:**"); st.dataframe(df_v, use_container_width=True, hide_index=True)
 
-# --- MÓDULO: FLOTA ---
+# --- FLOTA ---
 elif menu == "🚐 Flota":
-    st.title("🚐 Administración de Vehículos")
+    st.title("🚐 Flota")
     with st.form("f_flota"):
         p, m, mod, cond = st.text_input("Placa").upper(), st.text_input("Marca"), st.text_input("Modelo"), st.text_input("Conductor")
         if st.form_submit_button("➕ Añadir"):
             cur = conn.cursor(); cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, cond)); conn.commit(); st.rerun()
     df_f = pd.read_sql("SELECT id, placa, marca, modelo, conductor FROM vehiculos", conn)
     ed_f = st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True, num_rows="dynamic")
-    if st.button("💾 Guardar Cambios Flota"):
+    if st.button("💾 Guardar Cambios"):
         cur = conn.cursor(); ids_vivos = ed_f['id'].tolist()
         cur.execute(f"DELETE FROM vehiculos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
         for _, r in ed_f.iterrows(): cur.execute("UPDATE vehiculos SET placa=%s, marca=%s, modelo=%s, conductor=%s WHERE id=%s", (r['placa'], r['marca'], r['modelo'], r['conductor'], int(r['id'])))
         conn.commit(); st.rerun()
 
-# --- MÓDULO: GASTOS ---
+# --- GASTOS ---
 elif menu == "💸 Gastos":
-    st.title("💸 Registro de Gastos")
+    st.title("💸 Gastos")
     tab1, tab2 = st.tabs(["📝 Nuevo", "✏️ Editar/Borrar"])
     with tab1:
         with st.form("fg"):
@@ -174,7 +183,7 @@ elif menu == "💸 Gastos":
     with tab2:
         df_ge = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
         ed_g = st.data_editor(df_ge, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
-        if st.button("💾 Guardar Cambios Gastos"):
+        if st.button("💾 Guardar"):
             cur = conn.cursor(); ids_vivos = ed_g['id'].tolist()
             cur.execute(f"DELETE FROM gastos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
             for _, r in ed_g.iterrows():
@@ -182,10 +191,10 @@ elif menu == "💸 Gastos":
                 cur.execute("UPDATE gastos SET vehiculo_id=%s, tipo_gasto=%s, monto=%s, fecha=%s, detalle=%s WHERE id=%s", (int(v_id_n), r['tipo_gasto'], r['monto'], r['fecha'], r['detalle'], int(r['id'])))
             conn.commit(); st.rerun()
 
-# --- MÓDULO: VENTAS ---
+# --- VENTAS ---
 elif menu == "💰 Ventas":
-    st.title("💰 Control de Ingresos")
-    tab1, tab2 = st.tabs(["💰 Nuevo", "✏️ Editar/Borrar"])
+    st.title("💰 Ventas")
+    tab1, tab2 = st.tabs(["💰 Nuevo", "✏️ Editar"])
     with tab1:
         with st.form("fv"):
             v_sel = st.selectbox("Vehículo", v_query['placa'])
@@ -196,7 +205,7 @@ elif menu == "💰 Ventas":
     with tab2:
         df_ve = pd.read_sql("SELECT s.id, s.fecha, v.placa, s.cliente, s.valor_viaje, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.fecha DESC", conn)
         ed_v = st.data_editor(df_ve, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
-        if st.button("💾 Guardar Cambios Ventas"):
+        if st.button("💾 Actualizar Ventas"):
             cur = conn.cursor(); ids_vivos = ed_v['id'].tolist()
             cur.execute(f"DELETE FROM ventas WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
             for _, r in ed_v.iterrows():
@@ -204,7 +213,7 @@ elif menu == "💰 Ventas":
                 cur.execute("UPDATE ventas SET vehiculo_id=%s, cliente=%s, valor_viaje=%s, fecha=%s, descripcion=%s WHERE id=%s", (int(v_id_n), r['cliente'], r['valor_viaje'], r['fecha'], r['descripcion'], int(r['id'])))
             conn.commit(); st.rerun()
 
-# --- MÓDULO: HOJA DE VIDA ---
+# --- HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
     if st.button("🔔 Enviar Reporte Ahora"):
@@ -212,12 +221,12 @@ elif menu == "📑 Hoja de Vida":
         df_al = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
         msg, alert = "🚨 REPORTE VENCIMIENTOS:\n", False
         for _, r in df_al.iterrows():
-            # CORRECCIÓN DE ERROR DE TIPO: Convertir r[2], r[3], r[4] a fecha segura
+            # CORRECCIÓN PARA EVITAR TYPEERROR
             for doc, f in [("SOAT", r[2]), ("TECNO", r[3]), ("PREV", r[4])]:
                 if f:
-                    fecha_f = pd.to_datetime(f).date()
-                    if (fecha_f - hoy).days <= 15:
-                        msg += f"- {r[0]}: {doc} vence {fecha_f}\n"; alert = True
+                    f_dt = pd.to_datetime(f).date()
+                    if (f_dt - hoy).days <= 15:
+                        msg += f"- {r[0]}: {doc} vence {f_dt}\n"; alert = True
         if alert: enviar_alertas_sistema(msg)
         else: st.info("Todo al día.")
     with st.expander("📅 Actualizar Fechas"):
@@ -233,16 +242,16 @@ elif menu == "📑 Hoja de Vida":
         docs = [("SOAT", r['soat_vence']), ("TECNO", r['tecno_vence']), ("PREV", r['prev_vence']), ("T.OPER", r['t_operaciones']), ("POL. CONT", r['p_contractual']), ("POL. EXTRA", r['p_extracontractual']), ("TODO RIESGO", r['p_todoriesgo'])]
         for i, (n, f) in enumerate(docs):
             if f:
-                fecha_f = pd.to_datetime(f).date()
-                d = (fecha_f - hoy).days
+                f_dt = pd.to_datetime(f).date()
+                d = (f_dt - hoy).days
                 if d < 0: cols[i%4].error(f"❌ {n} VENCIDO")
                 elif d <= 15: cols[i%4].warning(f"⚠️ {n} ({d} d)")
                 else: cols[i%4].success(f"✅ {n} OK")
             else: cols[i%4].info(f"⚪ {n}: S/D")
 
-# --- MÓDULO: USUARIOS ---
+# --- USUARIOS ---
 elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
-    st.title("⚙️ Gestión de Usuarios")
+    st.title("⚙️ Usuarios")
     with st.form("fu"):
         nom, usr, clv, rol = st.text_input("Nombre"), st.text_input("Usuario"), st.text_input("Clave"), st.selectbox("Rol", ["vendedor", "admin"])
         if st.form_submit_button("👤 Crear"):
