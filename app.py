@@ -37,22 +37,12 @@ def enviar_alertas_sistema(mensaje):
         conn = conectar_db(); cur = conn.cursor()
         cur.execute("SELECT * FROM configuracion WHERE id = 1")
         conf = cur.fetchone(); conn.close()
-        
-        remitente = "".join(conf[1].split())
-        clave = "".join(conf[2].split())
-        destino = "".join(conf[3].split())
-
-        msg = MIMEText(mensaje)
-        msg['Subject'] = '🚨 REPORTE VENCIMIENTOS - C&E'
-        msg['From'] = remitente
-        msg['To'] = destino
-
+        remitente = "".join(conf[1].split()); clave = "".join(conf[2].split()); destino = "".join(conf[3].split())
+        msg = MIMEText(mensaje); msg['Subject'] = '🚨 REPORTE VENCIMIENTOS - C&E'; msg['From'] = remitente; msg['To'] = destino
         with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(remitente, clave)
-            server.sendmail(remitente, destino, msg.as_string())
+            server.login(remitente, clave); server.sendmail(remitente, destino, msg.as_string())
         st.success(f"✅ Reporte enviado con éxito")
-    except Exception as e: 
-        st.error(f"❌ Error: {e}")
+    except Exception as e: st.error(f"❌ Error: {e}")
 
 # --- 3. FUNCIONES APOYO ---
 def to_excel(df_balance, df_g, df_v):
@@ -82,80 +72,51 @@ if not st.session_state.logged_in:
             st.rerun()
     st.stop()
 
-# --- 6. MENÚ ---
+# --- 6. MENÚ Y BOTÓN CERRAR (RESTAURADO) ---
 st.sidebar.write(f"👋 **{st.session_state.u_name}**")
 target = st.sidebar.number_input("🎯 Meta Utilidad", value=5000000, step=500000)
 opciones = ["📊 Dashboard", "🚐 Flota", "💸 Gastos", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Usuarios"]
 if st.session_state.u_rol == "admin": opciones.append("🔒 Config. Alertas")
 menu = st.sidebar.selectbox("📂 MÓDULOS", opciones)
 
+# AQUÍ ESTÁ EL BOTÓN QUE FALTABA
+st.sidebar.divider()
+if st.sidebar.button("🚪 CERRAR SESIÓN"):
+    st.session_state.logged_in = False
+    st.rerun()
+
 conn = conectar_db()
 v_query = pd.read_sql("SELECT id, placa FROM vehiculos", conn)
 
-# --- DASHBOARD ORIGINAL ---
+# --- DASHBOARD ---
 if menu == "📊 Dashboard":
     st.title("📊 Análisis de Operación")
     c1, c2 = st.columns(2)
     with c1: placa_f = st.selectbox("Vehículo:", ["TODOS"] + v_query['placa'].tolist())
     with c2: rango = st.date_input("Rango de Fechas:", [datetime.now().date() - timedelta(days=30), datetime.now().date()])
-
     if len(rango) == 2:
         df_g = pd.read_sql("SELECT g.fecha, v.placa, g.tipo_gasto as concepto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id WHERE g.fecha BETWEEN %s AND %s", conn, params=[rango[0], rango[1]])
         df_v = pd.read_sql("SELECT s.fecha, v.placa, s.cliente, s.valor_viaje as monto, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id WHERE s.fecha BETWEEN %s AND %s", conn, params=[rango[0], rango[1]])
         if placa_f != "TODOS":
             df_g = df_g[df_g['placa'] == placa_f]; df_v = df_v[df_v['placa'] == placa_f]
-
         utilidad = df_v['monto'].sum() - df_g['monto'].sum()
         dif = utilidad - target
         if utilidad >= target: st.success(f"### 🏆 META ALCANZADA! Utilidad: ${utilidad:,.0f}"); st.balloons()
         else: st.error(f"### ⚠️ POR DEBAJO DE LA META \n Faltan: **${abs(dif):,.0f}**")
-
         m1, m2, m3 = st.columns(3)
-        m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}")
-        m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse")
-        m3.metric("Utilidad", f"${utilidad:,.0f}", delta=f"{dif:,.0f}")
-        
+        m1.metric("Ingresos", f"${df_v['monto'].sum():,.0f}"); m2.metric("Egresos", f"${df_g['monto'].sum():,.0f}", delta_color="inverse"); m3.metric("Utilidad", f"${utilidad:,.0f}", delta=f"{dif:,.0f}")
         st.subheader("📊 Consolidado de Gastos por Concepto")
         df_con = df_g.groupby('concepto')['monto'].sum().reset_index().sort_values(by='monto', ascending=False)
         st.dataframe(df_con.style.format({'monto': '${:,.0f}'}), use_container_width=True, hide_index=True)
         st.plotly_chart(px.pie(df_con, values='monto', names='concepto', hole=0.4), use_container_width=True)
-
-        res_g = df_g.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Gasto'})
-        res_v = df_v.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Venta'})
+        res_g = df_g.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Gasto'}); res_v = df_v.groupby('placa')['monto'].sum().reset_index().rename(columns={'monto': 'Venta'})
         balance_df = pd.merge(res_v, res_g, on='placa', how='outer').fillna(0)
         st.download_button("📥 Descargar Reporte Excel", data=to_excel(balance_df, df_g, df_v), file_name="Reporte_CE.xlsx")
-
         with st.expander("🔍 Ver detalles fila por fila"):
             st.write("**Gastos:**"); st.dataframe(df_g, use_container_width=True, hide_index=True)
             st.write("**Ventas:**"); st.dataframe(df_v, use_container_width=True, hide_index=True)
 
-# --- MÓDULO CONFIGURACIÓN PROTEGIDO ---
-elif menu == "🔒 Config. Alertas":
-    st.title("🔒 Configuración de Notificaciones")
-    st.info("Solo el administrador puede ver y modificar estos datos. Las claves están ocultas por seguridad.")
-    cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1"); act = cur.fetchone()
-    with st.form("f_conf"):
-        c1, c2 = st.columns(2)
-        rem = c1.text_input("Gmail Remitente", value=act[1] if act else "")
-        # USAMOS TYPE="PASSWORD" PARA OCULTAR LA CLAVE
-        cla = c1.text_input("Clave Gmail (16 letras)", type="password", value=act[2] if act else "")
-        des = c1.text_input("Correo Destino", value=act[3] if act else "")
-        
-        sid = c2.text_input("Twilio SID", value=act[4] if act else "")
-        # USAMOS TYPE="PASSWORD" PARA OCULTAR EL TOKEN
-        tok = c2.text_input("Twilio Token", type="password", value=act[5] if act else "")
-        f_w = c2.text_input("WhatsApp DE", value=act[6] if act else "")
-        t_w = c2.text_input("WhatsApp A", value=act[7] if act else "")
-        
-        if st.form_submit_button("💾 Guardar Cambios"):
-            cur.execute('''INSERT INTO configuracion (id, email_remitente, email_clave, email_destino, twilio_sid, twilio_token, twilio_whatsapp_de, whatsapp_a)
-                           VALUES (1, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET 
-                           email_remitente=EXCLUDED.email_remitente, email_clave=EXCLUDED.email_clave, email_destino=EXCLUDED.email_destino,
-                           twilio_sid=EXCLUDED.twilio_sid, twilio_token=EXCLUDED.twilio_token, twilio_whatsapp_de=EXCLUDED.twilio_whatsapp_de, whatsapp_a=EXCLUDED.whatsapp_a''',
-                        (rem, cla, des, sid, tok, f_w, t_w))
-            conn.commit(); st.success("Configuración guardada de forma segura."); st.rerun()
-
-# --- DEMÁS MÓDULOS (FLOTA, GASTOS, VENTAS, HOJA DE VIDA, USUARIOS) ---
+# --- FLOTA ---
 elif menu == "🚐 Flota":
     st.title("🚐 Flota")
     with st.form("f_flota"):
@@ -165,6 +126,7 @@ elif menu == "🚐 Flota":
     df_f = pd.read_sql("SELECT id, placa, marca, modelo, conductor FROM vehiculos", conn)
     st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True)
 
+# --- GASTOS ---
 elif menu == "💸 Gastos":
     st.title("💸 Gastos")
     with st.form("fg"):
@@ -175,6 +137,7 @@ elif menu == "💸 Gastos":
             v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
             cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (int(v_id), tipo, mon, fec, det)); conn.commit(); st.rerun()
 
+# --- VENTAS ---
 elif menu == "💰 Ventas":
     st.title("💰 Ventas")
     with st.form("fv"):
@@ -184,11 +147,12 @@ elif menu == "💰 Ventas":
             v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
             cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion) VALUES (%s,%s,%s,%s,%s)", (int(v_id), cli, val, fec, dsc)); conn.commit(); st.rerun()
 
+# --- HOJA DE VIDA ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
     if st.button("🔔 Enviar Reporte Ahora"):
         hoy = datetime.now().date(); df_al = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v JOIN hoja_vida h ON v.id = h.vehiculo_id", conn)
-        msg, alert = "🚨 REPORTE VENCIMIENTOS:\n", False
+        msg, alert = "🚨 REPORTE:\n", False
         for _, r in df_al.iterrows():
             for doc, f in [("SOAT", r[2]), ("TECNO", r[3]), ("PREV", r[4])]:
                 if f:
@@ -208,11 +172,19 @@ elif menu == "📑 Hoja de Vida":
                 else: cols[i%4].success(f"✅ {n} OK")
             else: cols[i%4].info(f"⚪ {n}: S/D")
 
-elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
-    st.title("⚙️ Usuarios")
-    with st.form("fu"):
-        nom, usr, clv, rol = st.text_input("Nombre"), st.text_input("Usuario"), st.text_input("Clave"), st.selectbox("Rol", ["vendedor", "admin"])
-        if st.form_submit_button("👤 Crear"):
-            cur = conn.cursor(); cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES (%s,%s,%s,%s)", (nom, usr, clv, rol)); conn.commit(); st.rerun()
+# --- CONFIGURACIÓN PROTEGIDA ---
+elif menu == "🔒 Config. Alertas":
+    st.title("🔒 Configuración Segura")
+    cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1"); act = cur.fetchone()
+    with st.form("f_conf"):
+        rem = st.text_input("Gmail Remitente", value=act[1] if act else "")
+        cla = st.text_input("Clave Gmail (16 letras)", type="password", value=act[2] if act else "")
+        des = st.text_input("Correo Destino", value=act[3] if act else "")
+        if st.form_submit_button("💾 Guardar"):
+            cur.execute('''INSERT INTO configuracion (id, email_remitente, email_clave, email_destino)
+                           VALUES (1, %s, %s, %s) ON CONFLICT (id) DO UPDATE SET 
+                           email_remitente=EXCLUDED.email_remitente, email_clave=EXCLUDED.email_clave, email_destino=EXCLUDED.email_destino''',
+                        (rem, cla, des))
+            conn.commit(); st.success("Guardado."); st.rerun()
 
 conn.close()
