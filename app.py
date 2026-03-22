@@ -72,14 +72,13 @@ if not st.session_state.logged_in:
             st.rerun()
     st.stop()
 
-# --- 6. MENÚ Y BOTÓN CERRAR (RESTAURADO) ---
+# --- 6. MENÚ Y BOTÓN CERRAR ---
 st.sidebar.write(f"👋 **{st.session_state.u_name}**")
 target = st.sidebar.number_input("🎯 Meta Utilidad", value=5000000, step=500000)
 opciones = ["📊 Dashboard", "🚐 Flota", "💸 Gastos", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Usuarios"]
 if st.session_state.u_rol == "admin": opciones.append("🔒 Config. Alertas")
 menu = st.sidebar.selectbox("📂 MÓDULOS", opciones)
 
-# AQUÍ ESTÁ EL BOTÓN QUE FALTABA
 st.sidebar.divider()
 if st.sidebar.button("🚪 CERRAR SESIÓN"):
     st.session_state.logged_in = False
@@ -172,7 +171,17 @@ elif menu == "📑 Hoja de Vida":
                 else: cols[i%4].success(f"✅ {n} OK")
             else: cols[i%4].info(f"⚪ {n}: S/D")
 
-# --- CONFIGURACIÓN PROTEGIDA ---
+# --- USUARIOS (RESTAURADO) ---
+elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
+    st.title("⚙️ Gestión de Usuarios")
+    with st.form("fu"):
+        nom, usr, clv, rol = st.text_input("Nombre"), st.text_input("Usuario"), st.text_input("Clave"), st.selectbox("Rol", ["vendedor", "admin"])
+        if st.form_submit_button("👤 Crear"):
+            cur = conn.cursor(); cur.execute("INSERT INTO usuarios (nombre, usuario, clave, rol) VALUES (%s,%s,%s,%s)", (nom, usr, clv, rol)); conn.commit(); st.rerun()
+    df_u = pd.read_sql("SELECT nombre, usuario, rol FROM usuarios", conn)
+    st.dataframe(df_u, use_container_width=True)
+
+# --- CONFIGURACIÓN ---
 elif menu == "🔒 Config. Alertas":
     st.title("🔒 Configuración Segura")
     cur = conn.cursor(); cur.execute("SELECT * FROM configuracion WHERE id = 1"); act = cur.fetchone()
