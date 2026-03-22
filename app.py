@@ -72,7 +72,7 @@ if not st.session_state.logged_in:
             st.rerun()
     st.stop()
 
-# --- 6. MENÚ Y BOTÓN CERRAR ---
+# --- 6. MENÚ ---
 st.sidebar.write(f"👋 **{st.session_state.u_name}**")
 target = st.sidebar.number_input("🎯 Meta Utilidad", value=5000000, step=500000)
 opciones = ["📊 Dashboard", "🚐 Flota", "💸 Gastos", "💰 Ventas", "📑 Hoja de Vida", "⚙️ Usuarios"]
@@ -115,38 +115,67 @@ if menu == "📊 Dashboard":
             st.write("**Gastos:**"); st.dataframe(df_g, use_container_width=True, hide_index=True)
             st.write("**Ventas:**"); st.dataframe(df_v, use_container_width=True, hide_index=True)
 
-# --- FLOTA ---
+# --- FLOTA (CON EDICIÓN) ---
 elif menu == "🚐 Flota":
     st.title("🚐 Flota")
     with st.form("f_flota"):
         p, m, mod, cond = st.text_input("Placa").upper(), st.text_input("Marca"), st.text_input("Modelo"), st.text_input("Conductor")
-        if st.form_submit_button("➕ Añadir Carro"):
+        if st.form_submit_button("➕ Añadir"):
             cur = conn.cursor(); cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, cond)); conn.commit(); st.rerun()
     df_f = pd.read_sql("SELECT id, placa, marca, modelo, conductor FROM vehiculos", conn)
-    st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True)
+    ed_f = st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True, num_rows="dynamic")
+    if st.button("💾 Guardar Cambios Flota"):
+        cur = conn.cursor(); ids_vivos = ed_f['id'].tolist()
+        cur.execute(f"DELETE FROM vehiculos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
+        for _, r in ed_f.iterrows(): cur.execute("UPDATE vehiculos SET placa=%s, marca=%s, modelo=%s, conductor=%s WHERE id=%s", (r['placa'], r['marca'], r['modelo'], r['conductor'], int(r['id'])))
+        conn.commit(); st.rerun()
 
-# --- GASTOS ---
+# --- GASTOS (CON EDICIÓN) ---
 elif menu == "💸 Gastos":
     st.title("💸 Gastos")
-    with st.form("fg"):
-        v_sel = st.selectbox("Vehículo", v_query['placa'])
-        tipo = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Viáticos", "Otros"])
-        mon, fec, det = st.number_input("Valor"), st.date_input("Fecha"), st.text_input("Nota")
-        if st.form_submit_button("💾 Guardar"):
-            v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
-            cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (int(v_id), tipo, mon, fec, det)); conn.commit(); st.rerun()
+    tab1, tab2 = st.tabs(["📝 Nuevo", "✏️ Editar/Borrar"])
+    with tab1:
+        with st.form("fg"):
+            v_sel = st.selectbox("Vehículo", v_query['placa'])
+            tipo = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Viáticos", "Otros"])
+            mon, fec, det = st.number_input("Valor"), st.date_input("Fecha"), st.text_input("Nota")
+            if st.form_submit_button("💾 Guardar"):
+                v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
+                cur = conn.cursor(); cur.execute("INSERT INTO gastos (vehiculo_id, tipo_gasto, monto, fecha, detalle) VALUES (%s,%s,%s,%s,%s)", (int(v_id), tipo, mon, fec, det)); conn.commit(); st.rerun()
+    with tab2:
+        df_ge = pd.read_sql("SELECT g.id, g.fecha, v.placa, g.tipo_gasto, g.monto, g.detalle FROM gastos g JOIN vehiculos v ON g.vehiculo_id = v.id ORDER BY g.fecha DESC", conn)
+        ed_g = st.data_editor(df_ge, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
+        if st.button("💾 Guardar Cambios Gastos"):
+            cur = conn.cursor(); ids_vivos = ed_g['id'].tolist()
+            cur.execute(f"DELETE FROM gastos WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
+            for _, r in ed_g.iterrows():
+                v_id_n = v_query[v_query['placa'] == r['placa']]['id'].values[0]
+                cur.execute("UPDATE gastos SET vehiculo_id=%s, tipo_gasto=%s, monto=%s, fecha=%s, detalle=%s WHERE id=%s", (int(v_id_n), r['tipo_gasto'], r['monto'], r['fecha'], r['detalle'], int(r['id'])))
+            conn.commit(); st.rerun()
 
-# --- VENTAS ---
+# --- VENTAS (CON EDICIÓN) ---
 elif menu == "💰 Ventas":
     st.title("💰 Ventas")
-    with st.form("fv"):
-        v_sel = st.selectbox("Vehículo", v_query['placa'])
-        cli, val, fec, dsc = st.text_input("Cliente"), st.number_input("Valor"), st.date_input("Fecha"), st.text_input("Nota")
-        if st.form_submit_button("💰 Registrar"):
-            v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
-            cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion) VALUES (%s,%s,%s,%s,%s)", (int(v_id), cli, val, fec, dsc)); conn.commit(); st.rerun()
+    tab1, tab2 = st.tabs(["💰 Nuevo", "✏️ Editar/Borrar"])
+    with tab1:
+        with st.form("fv"):
+            v_sel = st.selectbox("Vehículo", v_query['placa'])
+            cli, val, fec, dsc = st.text_input("Cliente"), st.number_input("Valor"), st.date_input("Fecha"), st.text_input("Nota")
+            if st.form_submit_button("💰 Registrar"):
+                v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
+                cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion) VALUES (%s,%s,%s,%s,%s)", (int(v_id), cli, val, fec, dsc)); conn.commit(); st.rerun()
+    with tab2:
+        df_ve = pd.read_sql("SELECT s.id, s.fecha, v.placa, s.cliente, s.valor_viaje, s.descripcion FROM ventas s JOIN vehiculos v ON s.vehiculo_id = v.id ORDER BY s.fecha DESC", conn)
+        ed_v = st.data_editor(df_ve, column_config={"id": None, "placa": st.column_config.SelectboxColumn("Vehículo", options=v_query['placa'].tolist())}, hide_index=True, use_container_width=True, num_rows="dynamic")
+        if st.button("💾 Guardar Cambios Ventas"):
+            cur = conn.cursor(); ids_vivos = ed_v['id'].tolist()
+            cur.execute(f"DELETE FROM ventas WHERE id NOT IN ({','.join(map(str, ids_vivos)) if ids_vivos else '0'})")
+            for _, r in ed_v.iterrows():
+                v_id_n = v_query[v_query['placa'] == r['placa']]['id'].values[0]
+                cur.execute("UPDATE ventas SET vehiculo_id=%s, cliente=%s, valor_viaje=%s, fecha=%s, descripcion=%s WHERE id=%s", (int(v_id_n), r['cliente'], r['valor_viaje'], r['fecha'], r['descripcion'], int(r['id'])))
+            conn.commit(); st.rerun()
 
-# --- HOJA DE VIDA (RESTAURADO CON FORMULARIO) ---
+# --- HOJA DE VIDA (RESTAURADO COMPLETO) ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
     if st.button("🔔 Enviar Reporte Ahora"):
@@ -160,7 +189,6 @@ elif menu == "📑 Hoja de Vida":
         if alert: enviar_alertas_sistema(msg)
         else: st.info("Todo al día.")
 
-    # ESTA PARTE ES LA QUE ACTUALIZA LA HOJA DE VIDA
     with st.expander("📅 ACTUALIZAR FECHAS DE DOCUMENTOS"):
         with st.form("fhv"):
             v_sel = st.selectbox("Seleccione Vehículo", v_query['placa'])
