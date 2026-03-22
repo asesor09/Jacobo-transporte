@@ -120,7 +120,7 @@ elif menu == "🚐 Flota":
     st.title("🚐 Flota")
     with st.form("f_flota"):
         p, m, mod, cond = st.text_input("Placa").upper(), st.text_input("Marca"), st.text_input("Modelo"), st.text_input("Conductor")
-        if st.form_submit_button("➕ Añadir"):
+        if st.form_submit_button("➕ Añadir Carro"):
             cur = conn.cursor(); cur.execute("INSERT INTO vehiculos (placa, marca, modelo, conductor) VALUES (%s,%s,%s,%s)", (p, m, mod, cond)); conn.commit(); st.rerun()
     df_f = pd.read_sql("SELECT id, placa, marca, modelo, conductor FROM vehiculos", conn)
     st.data_editor(df_f, column_config={"id": None}, hide_index=True, use_container_width=True)
@@ -146,7 +146,7 @@ elif menu == "💰 Ventas":
             v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
             cur = conn.cursor(); cur.execute("INSERT INTO ventas (vehiculo_id, cliente, valor_viaje, fecha, descripcion) VALUES (%s,%s,%s,%s,%s)", (int(v_id), cli, val, fec, dsc)); conn.commit(); st.rerun()
 
-# --- HOJA DE VIDA ---
+# --- HOJA DE VIDA (RESTAURADO CON FORMULARIO) ---
 elif menu == "📑 Hoja de Vida":
     st.title("📑 Vencimientos")
     if st.button("🔔 Enviar Reporte Ahora"):
@@ -159,6 +159,25 @@ elif menu == "📑 Hoja de Vida":
                     if (f_dt - hoy).days <= 15: msg += f"- {r[0]}: {doc} vence {f_dt}\n"; alert = True
         if alert: enviar_alertas_sistema(msg)
         else: st.info("Todo al día.")
+
+    # ESTA PARTE ES LA QUE ACTUALIZA LA HOJA DE VIDA
+    with st.expander("📅 ACTUALIZAR FECHAS DE DOCUMENTOS"):
+        with st.form("fhv"):
+            v_sel = st.selectbox("Seleccione Vehículo", v_query['placa'])
+            v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
+            c1, c2 = st.columns(2)
+            s_v, t_v, p_v = c1.date_input("SOAT"), c1.date_input("Tecno"), c1.date_input("Preventivo")
+            pc_v, pe_v, ptr_v, to_v = c2.date_input("P. Contractual"), c2.date_input("P. Extra"), c2.date_input("P. Todo Riesgo"), st.date_input("Tarjeta Operaciones")
+            if st.form_submit_button("🔄 GUARDAR ACTUALIZACIÓN"):
+                cur = conn.cursor()
+                cur.execute('''INSERT INTO hoja_vida (vehiculo_id, soat_vence, tecno_vence, prev_vence, p_contractual, p_extracontractual, p_todoriesgo, t_operaciones)
+                               VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (vehiculo_id) DO UPDATE SET 
+                               soat_vence=EXCLUDED.soat_vence, tecno_vence=EXCLUDED.tecno_vence, prev_vence=EXCLUDED.prev_vence, 
+                               p_contractual=EXCLUDED.p_contractual, p_extracontractual=EXCLUDED.p_extracontractual, 
+                               p_todoriesgo=EXCLUDED.p_todoriesgo, t_operaciones=EXCLUDED.t_operaciones''', 
+                            (int(v_id), s_v, t_v, p_v, pc_v, pe_v, ptr_v, to_v))
+                conn.commit(); st.success("Fechas actualizadas correctamente."); st.rerun()
+
     df_hv = pd.read_sql("SELECT v.placa, h.* FROM vehiculos v LEFT JOIN hoja_vida h ON v.id = h.vehiculo_id", conn); hoy = datetime.now().date()
     for _, r in df_hv.iterrows():
         st.subheader(f"Vehículo: {r['placa']}"); cols = st.columns(4)
@@ -171,9 +190,9 @@ elif menu == "📑 Hoja de Vida":
                 else: cols[i%4].success(f"✅ {n} OK")
             else: cols[i%4].info(f"⚪ {n}: S/D")
 
-# --- USUARIOS (RESTAURADO) ---
+# --- USUARIOS ---
 elif menu == "⚙️ Usuarios" and st.session_state.u_rol == "admin":
-    st.title("⚙️ Gestión de Usuarios")
+    st.title("⚙️ Usuarios")
     with st.form("fu"):
         nom, usr, clv, rol = st.text_input("Nombre"), st.text_input("Usuario"), st.text_input("Clave"), st.selectbox("Rol", ["vendedor", "admin"])
         if st.form_submit_button("👤 Crear"):
