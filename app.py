@@ -137,7 +137,7 @@ elif menu == "💸 Gastos":
     with tab1:
         with st.form("fg"):
             v_sel = st.selectbox("Vehículo", v_query['placa'])
-            tipo = st.selectbox("Concepto", ["Combustible", "Peaje", "Mantenimiento", "Lavada", "Viáticos", "Otros"])
+            tipo = st.selectbox("Concepto", ["Combustible", "Peaje", " Nomina", "Pagos finacieros", "Mantenimiento", "Lavada", "Viáticos", "Otros"])
             mon, fec, det = st.number_input("Valor"), st.date_input("Fecha"), st.text_input("Nota")
             if st.form_submit_button("💾 Guardar"):
                 v_id = v_query[v_query['placa'] == v_sel]['id'].values[0]
